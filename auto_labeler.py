@@ -8,9 +8,6 @@ MODEL_PATH = "models/pose_landmarker_full.task"
 # ------------------ Pose skeleton + params ------------------
 
 POSE_CONNECTIONS = [
-    (0, 1), (1, 2), (2, 3), (3, 7),
-    (0, 4), (4, 5), (5, 6), (6, 8),
-    (9, 10),
     (11, 12),
     (11, 23), (12, 24),
     (23, 24),
@@ -27,9 +24,9 @@ POSE_CONNECTIONS = [
 LEFT_ANKLE_IDX = 27
 RIGHT_ANKLE_IDX = 28
 
-# Thresholds in t-space: t=0 at far endpoint, t=1 at near endpoint
+# Thresholds in t-space | t=0 at far endpoint, t=1 at near endpoint
 FAR_T_THRESHOLD = 0.0
-NEAR_T_THRESHOLD = 1.0  # if near endpoint is a bit beyond true stop, use 0.9
+NEAR_T_THRESHOLD = 1.0
 
 # Exponential smoothing factor for t_along
 SMOOTH_ALPHA = 0.7  # 0.7 current frame, 0.3 previous
@@ -38,16 +35,32 @@ SMOOTH_ALPHA = 0.7  # 0.7 current frame, 0.3 previous
 
 def draw_pose(frame_bgr, pose_landmarks, *, point_radius=4, line_thickness=2):
     h, w = frame_bgr.shape[:2]
+
+    # draw skeleton lines
     for a, b in POSE_CONNECTIONS:
         la = pose_landmarks[a]
         lb = pose_landmarks[b]
         xa, ya = int(la.x * w), int(la.y * h)
         xb, yb = int(lb.x * w), int(lb.y * h)
         cv2.line(frame_bgr, (xa, ya), (xb, yb), (0, 255, 0), line_thickness)
-    for lm in pose_landmarks:
+
+    FACE_IDXS = set(range(0, 11))  # mediapipe face landmarks
+
+    # draw body landmarks
+    for i, lm in enumerate(pose_landmarks):
+        if i in FACE_IDXS:
+            continue
+
         x = int(lm.x * w)
         y = int(lm.y * h)
         cv2.circle(frame_bgr, (x, y), point_radius, (0, 255, 0), -1)
+
+    # draw single face point
+    NOSE_IDX = 0
+    lm = pose_landmarks[NOSE_IDX]
+    x = int(lm.x * w)
+    y = int(lm.y * h)
+    cv2.circle(frame_bgr, (x, y), point_radius, (0, 255, 0), -1)
 
 
 def compute_body_point_px(pose_landmarks, frame_shape):
@@ -87,7 +100,7 @@ def follow_rope_upwards(
         if curr_y <= 0:
             break
 
-        # ---- Estimate line direction from last two points ----
+        # Estimate line direction from last two points
         if len(path) >= 2:
             x2_full, y2_full = path[-1]
             x1_full, y1_full = path[-2]
@@ -113,7 +126,7 @@ def follow_rope_upwards(
         best_x = None
         best_y = None
 
-        # ---- Scan rows above current point ----
+        # Scan rows above current point
         for dy in range(1, max_vertical_step + 1):
             y = curr_y - dy
             if y < 0:
@@ -235,7 +248,7 @@ def detect_rope_endpoints_auto(first_frame, show_debug=True):
 
     debug_color = cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR)
 
-    # --- Find near segment: bottom-most elongated component ---
+    # Find near segment: bottom-most elongated component
     best_label = None
     best_score = -1.0
     band_half_width_for_walk = 12  # default; will update from bbox
@@ -295,7 +308,7 @@ def detect_rope_endpoints_auto(first_frame, show_debug=True):
     print(f"  Near endpoint: {near_endpoint}")
     print(f"  Initial band half-width for walking: {band_half_width_for_walk}")
 
-    # --- Walk upward from near_endpoint along rope ---
+    # Walk upward from near_endpoint along rope
     far_endpoint, path = follow_rope_upwards(
         roi_eq,
         y0,
@@ -442,7 +455,7 @@ with PoseLandmarker.create_from_options(options) as landmarker:
 
         frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
 
-        # --- homography for the ground plane ---
+        # homography for the ground plane
         p_next, st, err = cv2.calcOpticalFlowPyrLK(old_gray, frame_gray, p_prev, None, **lk_params)
         if p_next is not None:
             good_new = p_next[st == 1]
@@ -469,7 +482,7 @@ with PoseLandmarker.create_from_options(options) as landmarker:
             far_ep_curr = (int(pts_curr[0, 0]), int(pts_curr[0, 1]))
             near_ep_curr = (int(pts_curr[1, 0]), int(pts_curr[1, 1]))
 
-        # --- pose estimation ---
+        # pose estimation
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp_image_module(
             image_format=mp.ImageFormat.SRGB,
@@ -489,7 +502,7 @@ with PoseLandmarker.create_from_options(options) as landmarker:
             cv2.circle(frame_bgr, near_ep_curr, 7, (0, 0, 255), -1)
             cv2.line(frame_bgr, far_ep_curr, near_ep_curr, (0, 255, 255), 2)
 
-            # --- 1D depth along rope: t_along ---
+            # 1D depth along rope: t_along
             Ax, Ay = far_ep_curr
             Bx, By = near_ep_curr
             Px, Py = body_px
