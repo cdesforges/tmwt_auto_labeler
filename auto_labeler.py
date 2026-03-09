@@ -86,14 +86,14 @@ def follow_rope_upwards(
     h_roi, w = roi_eq.shape
     x_full, y_full = start_full
 
-    curr_x = int(np.clip(x_full, 0, w - 1))
-    curr_y = int(np.clip(y_full - y0, 0, h_roi - 1))
+    curr_x = int(np.clip(x_full, 0, w - 1))             # clip to make sure we stay within image bounds
+    curr_y = int(np.clip(y_full - y0, 0, h_roi - 1))    # curr_x and curr_y are back in full image coordinates
 
     start_int = float(roi_eq[curr_y, curr_x])
     min_intensity = start_int * min_rel_intensity
     max_step_dist2 = max_step_dist * max_step_dist
 
-    path = [(int(x_full), int(y_full))]
+    path = [(int(x_full), int(y_full))]                        # list of tuples containing path coordinates in order we will build
     prev_int = start_int
 
     for _ in range(max_steps):
@@ -190,7 +190,7 @@ def follow_rope_upwards(
 
 def detect_rope_endpoints_auto(first_frame, show_debug=True):
     """
-    1) Build a bright-thin-structure mask in the ground ROI.
+    1) Build a bright-thin-structure mask in the ground ROI (region of interest).
     2) Use connected components to find a bottom-most sizable, elongated segment
        (near rope segment).
     3) Define near endpoint as the bottom-most pixel in that segment.
