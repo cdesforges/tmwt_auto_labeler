@@ -36,24 +36,28 @@ NOSE_IDX = 0
 
 
 def create_landmarker(model_path=DEFAULT_MODEL_PATH, num_poses=1):
-    """
-    Create and return a MediaPipe PoseLandmarker configured for VIDEO mode.
-
-    Args:
-        model_path: Path to the .task model file.
-        num_poses: Max number of poses to detect per frame.
-
-    Returns:
-        A PoseLandmarker instance (use as context manager).
-    """
+    """VIDEO-mode landmarker for streaming frames."""
     mp_tasks = mp.tasks
     options = mp_tasks.vision.PoseLandmarkerOptions(
         base_options=mp_tasks.BaseOptions(model_asset_path=model_path),
         running_mode=mp_tasks.vision.RunningMode.VIDEO,
         num_poses=num_poses,
-        min_pose_detection_confidence=0.5,
-        min_pose_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
+        min_pose_detection_confidence=0.8,
+        min_pose_presence_confidence=0.8,
+        min_tracking_confidence=0.8,
+    )
+    return mp_tasks.vision.PoseLandmarker.create_from_options(options)
+
+
+def create_image_landmarker(model_path=DEFAULT_MODEL_PATH, num_poses=1):
+    """IMAGE-mode landmarker for one-off single-frame detection (e.g. manual selection)."""
+    mp_tasks = mp.tasks
+    options = mp_tasks.vision.PoseLandmarkerOptions(
+        base_options=mp_tasks.BaseOptions(model_asset_path=model_path),
+        running_mode=mp_tasks.vision.RunningMode.IMAGE,
+        num_poses=num_poses,
+        min_pose_detection_confidence=0.8,
+        min_pose_presence_confidence=0.8,
     )
     return mp_tasks.vision.PoseLandmarker.create_from_options(options)
 
@@ -74,6 +78,14 @@ def detect_poses(landmarker, frame_bgr, timestamp_ms):
     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
     result = landmarker.detect_for_video(mp_image, int(timestamp_ms))
+    return result.pose_landmarks if result.pose_landmarks else []
+
+
+def detect_poses_image(landmarker, frame_bgr):
+    """Single-frame pose detection (IMAGE mode — no timestamps)."""
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+    result = landmarker.detect(mp_image)
     return result.pose_landmarks if result.pose_landmarks else []
 
 

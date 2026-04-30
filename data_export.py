@@ -80,10 +80,10 @@ class FrameDataRecorder:
             "frame_h": self.frame_h,
             "body_x": body_px[0] if body_px else "",
             "body_y": body_px[1] if body_px else "",
-            "far_ep_x": far_ep[0],
-            "far_ep_y": far_ep[1],
-            "near_ep_x": near_ep[0],
-            "near_ep_y": near_ep[1],
+            "far_ep_x": far_ep[0] if far_ep else "",
+            "far_ep_y": far_ep[1] if far_ep else "",
+            "near_ep_x": near_ep[0] if near_ep else "",
+            "near_ep_y": near_ep[1] if near_ep else "",
             "t_along": round(t_along, 6) if t_along is not None else "",
         }
 

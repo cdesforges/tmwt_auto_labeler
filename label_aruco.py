@@ -25,13 +25,18 @@ import sys
 import cv2
 import numpy as np
 
-from pose import create_landmarker, detect_poses, draw_pose, get_ankle_midpoint
+from pose import create_landmarker, create_image_landmarker, detect_poses, draw_pose, get_ankle_midpoint
 from tracking import GroundTracker
-from manual_selection import select_rope_endpoints
+from manual_selection import detect_endpoints
 from data_export import FrameDataRecorder
 
 # Video file extensions to look for
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v"}
+
+# set up aruco stuff
+aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50)
+params = cv2.aruco.DetectorParameters()
+detector = cv2.aruco.ArucoDetector(aruco_dict, params)
 
 
 def find_videos(input_dir):
@@ -71,81 +76,134 @@ def process_video(video_path, output_path, model_path):
         print(f"  ERROR: Cannot open video {video_path}")
         return
 
+    # find first non-black frame
+    first_frame_idx = find_first_frame(cap)
+    if not first_frame_idx:
+        print(f"The whole video appeared to be black frames... exiting")
+        return
+
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     delay = int(400 / fps) if fps and fps > 0 else 30
     print(f"  FPS: {fps}, Total frames: {total_frames}")
 
-    # Read the first frame
-    ret, first_frame = cap.read()
+    # [Step 1] Manual selection — uses an IMAGE-mode landmarker (no timestamp state)
+    print("\n  [Step 1] Selecting endpoints...")
+    image_landmarker = create_image_landmarker(model_path)
+    try:
+        far_ep, near_ep, manual_start_mode = detect_endpoints(cap, detector, image_landmarker)
+    finally:
+        image_landmarker.close()
+    if near_ep is None:
+        print("  ERROR: Endpoint selection failed or was cancelled.")
+        cap.release()
+        return
+    if manual_start_mode:
+        print("  Manual start mode: spacebar drives timing.")
+
+    # Read first frame once for GroundTracker init / retry prompt
+    cap.set(cv2.CAP_PROP_POS_FRAMES, first_frame_idx)
+    ret, first_frame_bgr = cap.read()
     if not ret:
         print("  ERROR: Failed to read first frame.")
         cap.release()
         return
+    h_frame, w_frame = first_frame_bgr.shape[:2]
 
-    # --- Step 1: Manual rope endpoint selection ---
-    print("\n  [Step 1] Select rope endpoints on the first frame.")
-    far_ep, near_ep = select_rope_endpoints(first_frame)
-    if far_ep is None or near_ep is None:
-        print("  Rope selection cancelled. Skipping video.")
-        cap.release()
-        return
-    print(f"  Far endpoint:  {far_ep}")
-    print(f"  Near endpoint: {near_ep}")
+    # Outer retry loop: pass 1 uses pose-based detection (with optional manual start);
+    # pass 2 (if no end was detected) is full manual: spacebar drives start AND stop.
+    full_manual = False
+    final_recorder = None
+    final_frame_idx = 0
 
-    # --- Step 2: Create pose landmarker (single person tracking) ---
-    print("\n  [Step 2] Initializing pose detector (single person mode)...")
-    landmarker = create_landmarker(model_path)
+    while True:
+        # Fresh landmarker each pass — VIDEO mode requires monotonically increasing timestamps
+        landmarker = create_landmarker(model_path)
+        try:
+            tracker = GroundTracker(first_frame_bgr)
+        except RuntimeError as e:
+            print(f"  ERROR: {e}")
+            landmarker.close()
+            cap.release()
+            return
+        recorder = FrameDataRecorder(frame_w=w_frame, frame_h=h_frame)
 
-    # --- Step 3: Initialize ground tracking ---
-    print("\n  [Step 3] Initializing ground-plane tracker...")
-    try:
-        tracker = GroundTracker(first_frame)
-    except RuntimeError as e:
-        print(f"  ERROR: {e}")
+        mode_label = "FULL MANUAL" if full_manual else ("MANUAL START" if manual_start_mode else "AUTO")
+        print(f"\n  Processing frames... ({mode_label})")
+
+        walk_start_time, walk_end_time, walk_duration, frame_idx = run_walk_pass(
+            cap=cap,
+            first_frame_idx=first_frame_idx,
+            fps=fps,
+            delay=delay,
+            tracker=tracker,
+            landmarker=landmarker,
+            recorder=recorder,
+            far_ep=far_ep,
+            near_ep=near_ep,
+            manual_start_mode=manual_start_mode,
+            full_manual=full_manual,
+        )
         landmarker.close()
-        cap.release()
-        return
-    print(f"  Ground features found: {len(tracker.p0)}")
+        final_recorder = recorder
+        final_frame_idx = frame_idx
 
-    # --- Step 4: Process all frames ---
-    print("\n  [Step 4] Processing frames...")
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Rewind to start
-    h_frame, w_frame = first_frame.shape[:2]
-    recorder = FrameDataRecorder(frame_w=w_frame, frame_h=h_frame)
-    frame_idx = 0
+        # Done if we got an end, already retried, or there's nothing meaningful to retry
+        if walk_end_time is not None or full_manual:
+            break
 
-    # Walk timing state
-    SMOOTH_ALPHA = 0.7  # Exponential smoothing for t_along
-    FAR_T = 0.0         # t threshold at far (start) end
-    NEAR_T = 1.0        # t threshold at near (finish) end
+        if not prompt_full_manual_retry(first_frame_bgr):
+            break
+        full_manual = True
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+    if final_recorder is not None:
+        final_recorder.save(output_path)
+    print(f"  Done. Processed {final_frame_idx} frames.")
+
+
+def run_walk_pass(cap, first_frame_idx, fps, delay,
+                  tracker, landmarker, recorder,
+                  far_ep, near_ep,
+                  manual_start_mode, full_manual):
+    """
+    One pass through the video. Returns (walk_start_time, walk_end_time, walk_duration, frame_idx).
+
+    Modes:
+      auto             : pose-based start AND end (FAR_T / NEAR_T crossings of t_along).
+      manual_start_mode: spacebar = start; pose-based end is still active.
+      full_manual      : spacebar = start AND stop; pose-based crossings disabled.
+    """
+    SMOOTH_ALPHA = 0.7
+    FAR_T = 0.0
+    NEAR_T = 1.0
 
     prev_t_smooth = None
     prev_time_s = None
-    walk_start_time = None   # Time when person crosses the far endpoint
-    walk_end_time = None     # Time when person crosses the near endpoint
-    walk_duration = None     # Final walk time in seconds
+    walk_start_time = None
+    walk_end_time = None
+    walk_duration = None
+    frame_idx = 0
+
+    spacebar_active = manual_start_mode or full_manual
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, first_frame_idx)
 
     while True:
         ret, frame_bgr = cap.read()
         if not ret:
             break
 
-        # Compute timestamp
         ts_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
         if not ts_ms or ts_ms < 0:
             ts_ms = (frame_idx / fps) * 1000.0 if fps and fps > 0 else frame_idx * delay
         time_s = ts_ms / 1000.0
 
-        # Update ground-plane homography
         H = tracker.update(frame_bgr)
+        far_ep_curr, near_ep_curr = GroundTracker.transform_points(H, [far_ep, near_ep])
 
-        # Transform rope endpoints to current frame
-        far_ep_curr, near_ep_curr = GroundTracker.transform_points(
-            H, [far_ep, near_ep]
-        )
-
-        # Run pose detection (single person mode)
         all_poses = detect_poses(landmarker, frame_bgr, ts_ms)
 
         body_px = None
@@ -159,7 +217,6 @@ def process_video(video_path, output_path, model_path):
             body_px = get_ankle_midpoint(pose_lm, frame_bgr.shape)
             cv2.circle(frame_bgr, body_px, 5, (0, 0, 255), -1)
 
-            # Compute t_along (normalized position along the rope line)
             Ax, Ay = far_ep_curr
             Bx, By = near_ep_curr
             Px, Py = body_px
@@ -170,16 +227,14 @@ def process_video(video_path, output_path, model_path):
             if vv > 1e-6:
                 t_along = float(v.dot(w_vec) / vv)
 
-                # Smooth the t_along value
                 if prev_t_smooth is None:
                     t_smooth = t_along
                 else:
                     t_smooth = SMOOTH_ALPHA * t_along + (1.0 - SMOOTH_ALPHA) * prev_t_smooth
 
-                # Detect walk start: crossing the far threshold (t >= 0)
-                if walk_start_time is None:
+                # Pose-based START: only in pure auto mode
+                if not (manual_start_mode or full_manual) and walk_start_time is None:
                     if prev_t_smooth is not None and prev_t_smooth < FAR_T and t_smooth >= FAR_T:
-                        # Interpolate exact crossing time
                         frac = (FAR_T - prev_t_smooth) / (t_smooth - prev_t_smooth) if t_smooth != prev_t_smooth else 0.0
                         walk_start_time = prev_time_s + frac * (time_s - prev_time_s)
                         print(f"  Walk STARTED at {walk_start_time:.3f}s")
@@ -187,8 +242,8 @@ def process_video(video_path, output_path, model_path):
                         walk_start_time = time_s
                         print(f"  Walk STARTED at {walk_start_time:.3f}s (initial)")
 
-                # Detect walk end: crossing the near threshold (t >= 1)
-                if walk_start_time is not None and walk_end_time is None:
+                # Pose-based END: any mode except full_manual
+                if not full_manual and walk_start_time is not None and walk_end_time is None:
                     if prev_t_smooth is not None and prev_t_smooth < NEAR_T and t_smooth >= NEAR_T:
                         frac = (NEAR_T - prev_t_smooth) / (t_smooth - prev_t_smooth) if t_smooth != prev_t_smooth else 0.0
                         walk_end_time = prev_time_s + frac * (time_s - prev_time_s)
@@ -203,7 +258,6 @@ def process_video(video_path, output_path, model_path):
         cv2.circle(frame_bgr, near_ep_curr, 7, (0, 0, 255), -1)   # Red = near
         cv2.line(frame_bgr, far_ep_curr, near_ep_curr, (0, 255, 255), 2)
 
-        # Record data for this frame
         recorder.add_frame(
             frame_idx=frame_idx,
             time_s=time_s,
@@ -218,21 +272,15 @@ def process_video(video_path, output_path, model_path):
         h_frame, w_frame = frame_bgr.shape[:2]
         panel_w = 300
         panel = np.zeros((h_frame, panel_w, 3), dtype=np.uint8)
-
-        # Panel content (white text on black background)
-        x0 = 15  # left margin in panel
+        x0 = 15
         y_pos = 40
 
-        # Title
         cv2.putText(panel, "TMWT Labeler", (x0, y_pos),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         y_pos += 15
-
-        # Separator line
         cv2.line(panel, (x0, y_pos), (panel_w - x0, y_pos), (80, 80, 80), 1)
         y_pos += 30
 
-        # Walk status
         if walk_duration is not None:
             status = "FINISHED"
             status_color = (0, 200, 0)
@@ -249,7 +297,6 @@ def process_video(video_path, output_path, model_path):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
         y_pos += 40
 
-        # Timer display
         if walk_duration is not None:
             cv2.putText(panel, "Walk Time", (x0, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
@@ -268,17 +315,18 @@ def process_video(video_path, output_path, model_path):
             cv2.putText(panel, f"{elapsed:.2f}s", (x0, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 2)
         else:
-            cv2.putText(panel, "Waiting for person", (x0, y_pos),
+            wait_msg = "Press SPACE when" if spacebar_active else "Waiting for person"
+            line2 = "person starts walking" if spacebar_active else "to cross start line..."
+            cv2.putText(panel, wait_msg, (x0, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
             y_pos += 25
-            cv2.putText(panel, "to cross start line...", (x0, y_pos),
+            cv2.putText(panel, line2, (x0, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
 
         y_pos += 50
         cv2.line(panel, (x0, y_pos), (panel_w - x0, y_pos), (80, 80, 80), 1)
         y_pos += 25
 
-        # Frame info
         cv2.putText(panel, f"Frame: {frame_idx}", (x0, y_pos),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 120, 120), 1)
         y_pos += 22
@@ -289,28 +337,50 @@ def process_video(video_path, output_path, model_path):
             cv2.putText(panel, f"t_along: {t_along:.3f}", (x0, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 120, 120), 1)
 
-        # Controls at bottom
-        cv2.putText(panel, "q = stop", (x0, h_frame - 15),
+        if full_manual:
+            controls = "space = start/stop | q = quit"
+        elif manual_start_mode:
+            controls = "space = start | q = quit"
+        else:
+            controls = "q = stop"
+        cv2.putText(panel, controls, (x0, h_frame - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (80, 80, 80), 1)
 
-        # Combine video + panel side by side
         combined = np.hstack([frame_bgr, panel])
-
-        # Display
         cv2.imshow("TMWT Labeler", combined)
-        if cv2.waitKey(delay) & 0xFF == ord("q"):
+        key = cv2.waitKey(delay) & 0xFF
+        if key == ord("q"):
             print("  Stopped early by user.")
             break
+        if spacebar_active and key == ord(" "):
+            if walk_start_time is None:
+                walk_start_time = time_s
+                print(f"  Walk STARTED (manual) at {walk_start_time:.3f}s")
+            elif full_manual and walk_end_time is None:
+                walk_end_time = time_s
+                walk_duration = walk_end_time - walk_start_time
+                print(f"  Walk FINISHED (manual) at {walk_end_time:.3f}s — Duration: {walk_duration:.3f}s")
 
         frame_idx += 1
 
-    cap.release()
-    cv2.destroyAllWindows()
-    landmarker.close()
+    return walk_start_time, walk_end_time, walk_duration, frame_idx
 
-    # Save the data
-    recorder.save(output_path)
-    print(f"  Done. Processed {frame_idx} frames.")
+
+def prompt_full_manual_retry(frame_bgr):
+    """Show a popup asking whether to retry in full manual mode. Returns True if 'r'."""
+    window = "No walk end detected"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    display = frame_bgr.copy()
+    cv2.putText(display, "No walk end was detected.",
+                (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 100, 255), 2)
+    cv2.putText(display, "Press 'r' to retry in full manual mode (spacebar = start AND stop).",
+                (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
+    cv2.putText(display, "Any other key to skip and save what we have.",
+                (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
+    cv2.imshow(window, display)
+    key = cv2.waitKey(0) & 0xFF
+    cv2.destroyWindow(window)
+    return key == ord("r")
 
 
 def main():
@@ -359,6 +429,21 @@ def main():
         process_video(video_path, output_path, args.model)
 
     print(f"\nAll done! Output files are in '{output_dir}'.")
+
+def is_black_frame(frame_bgr, threshold=10):
+    return frame_bgr.mean() < threshold
+
+def find_first_frame(cap):
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("  ERROR: Reached end of video without finding a non-black frame.")
+            return None
+        if not is_black_frame(frame):
+            idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)  # rewind to that frame
+            print(f"First frame idx: {idx}")
+            return idx
 
 
 if __name__ == "__main__":

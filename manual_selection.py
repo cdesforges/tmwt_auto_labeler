@@ -9,8 +9,7 @@ Displays the first frame of a video and lets the user:
 
 import cv2
 import numpy as np
-from pose import detect_poses, draw_pose, get_pose_center
-
+from pose import detect_poses, detect_poses_image, draw_pose, get_pose_center, get_ankle_midpoint
 
 # ---- State for mouse callbacks ----
 
@@ -136,11 +135,10 @@ def select_person(frame_bgr, landmarker):
         landmarker: A MediaPipe PoseLandmarker instance.
 
     Returns:
-        (pose_index, initial_center) — the index and hip-center (x, y) of the
+        (pose_index, initial_center) — the index and ankle-center (x, y) of the
         selected pose, or (None, None) if no poses detected or user quits.
     """
-    # Use timestamp 0 for the first frame
-    all_poses = detect_poses(landmarker, frame_bgr, timestamp_ms=0)
+    all_poses = detect_poses_image(landmarker, frame_bgr)
 
     if not all_poses:
         print("  No poses detected in first frame.")
@@ -148,7 +146,7 @@ def select_person(frame_bgr, landmarker):
 
     if len(all_poses) == 1:
         print("  Single person detected — auto-selected.")
-        center = get_pose_center(all_poses[0], frame_bgr.shape)
+        center = get_ankle_midpoint(all_poses[0], frame_bgr.shape)
         return 0, center
 
     # Multiple people: draw them all with different colors and ask user to click
@@ -169,7 +167,7 @@ def select_person(frame_bgr, landmarker):
     for i, pose_lm in enumerate(all_poses):
         color = colors[i % len(colors)]
         draw_pose(display, pose_lm, color=color)
-        center = get_pose_center(pose_lm, frame_bgr.shape)
+        center = get_ankle_midpoint(pose_lm, frame_bgr.shape)
         centers.append(center)
         # Label each person with a number
         cv2.putText(
@@ -185,7 +183,7 @@ def select_person(frame_bgr, landmarker):
     )
     cv2.imshow(window, display)
 
-    click = _wait_for_click(window)
+    click = _wait_for_click_or_key(window)
     cv2.destroyWindow(window)
 
     if click is None:
@@ -197,3 +195,85 @@ def select_person(frame_bgr, landmarker):
     selected = int(np.argmin(dists))
     print(f"  Selected person {selected + 1} of {len(all_poses)}.")
     return selected, centers[selected]
+
+
+
+def detect_endpoints(cap, detector, landmarker):
+    """
+    Returns (far_ep, near_ep, manual_start_mode):
+      far_ep: (x, y) far rope endpoint, or None if pose was not detected.
+      near_ep: (x, y) near rope endpoint from the ArUco marker.
+      manual_start_mode: True if pose was not detected and the user must
+        drive timing with spacebar in the main loop.
+      Returns (None, None, False) on failure.
+    """
+    if not cap.isOpened():
+        print(f"  ERROR: Detect endpoints was passed an unopened cap object!")
+        return None, None, False
+
+    ret, frame_bgr = cap.read()
+    if not ret:
+        print("  ERROR: Could not read first frame.")
+        return None, None, False
+
+    _, far_ep = select_person(frame_bgr, landmarker)
+    manual_start_mode = far_ep is None
+
+    corners, ids, rejected = detector.detectMarkers(frame_bgr)
+    print(f"ids = {ids}")
+    near_ep = None
+    if ids is not None and len(ids.flatten()) == 1:
+        near_ep = tuple(corners[0][0][2].astype(int))
+    if near_ep is None:
+        print("  ERROR: Need exactly one ArUco marker in the first frame.")
+        return None, None, False
+
+    window = "Verify Endpoints"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(window, _on_mouse_click)
+
+    # In manual-start mode, ask the user to click where the person starts walking
+    # so the rope direction (far→near) is still defined for end-detection.
+    if manual_start_mode:
+        display = frame_bgr.copy()
+        cv2.circle(display, near_ep, 7, (0, 0, 255), -1)
+        cv2.putText(
+            display, "Person not detected, manual timer start needed!",
+            (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 100, 255), 2,
+        )
+        cv2.putText(
+            display, "Use the spacebar once the person has started walking.",
+            (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2,
+        )
+        cv2.putText(
+            display, "First, click where the person starts walking.",
+            (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2,
+        )
+        cv2.imshow(window, display)
+        click = _wait_for_click_or_key(window)
+        if click is None:
+            cv2.destroyWindow(window)
+            return None, None, False
+        far_ep = click
+
+    while True:
+        display = frame_bgr.copy()
+        cv2.circle(display, far_ep, 7, (255, 0, 0), -1)
+        cv2.circle(display, near_ep, 7, (0, 0, 255), -1)
+        cv2.line(display, far_ep, near_ep, (0, 255, 255), 2)
+        prompt = (
+            "Press any key to BEGIN (spacebar will start the timer), or 'q' to quit"
+            if manual_start_mode
+            else "Press any key to confirm, or 'q' to quit"
+        )
+        cv2.putText(
+            display, prompt,
+            (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
+        )
+        cv2.imshow(window, display)
+
+        key = cv2.waitKey(0) & 0xFF
+        cv2.destroyWindow(window)
+        if key == ord("q"):
+            return None, None, False
+        return far_ep, near_ep, manual_start_mode
