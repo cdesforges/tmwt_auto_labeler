@@ -1,6 +1,6 @@
 ## This script labels ten meter walk and run tests with mediapipe!
 
-To use it, download this folder and install the necessary libraries by opening a terminal window, navigating to the folder that you've downloaded, and running these three lines:
+To use it, download the project folder and install the necessary libraries by opening a terminal window, navigating to the folder that you've downloaded, and running these three lines:
 
 #### *set up a local python environment for us to install our needed libraries into*
 ```
