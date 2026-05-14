@@ -2,11 +2,14 @@ This script labels ten meter walk and run tests with mediapipe!
 
 To use it, download this folder and install the necessary libraries by opening a terminal window, navigating to the folder that you've downloaded, and running these three lines:
 
-python3 -m venv .venv                ## this sets up a local python environment for us to install our needed libraries into
+## this sets up a local python environment for us to install our needed libraries into
+python3 -m venv .venv
 
-source .venv/bin/activate            ## this switches us to the new environment so when we install we install locally
+## this switches us to the new environment so when we install we install locally
+source .venv/bin/activate
 
-pip install requirements.txt         ## this will install all the necessary packages
+## this will install all the necessary packages
+pip install requirements.txt
 
 After, you call the script like so:
 
