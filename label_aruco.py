@@ -387,12 +387,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="TMWT Manual Labeler — label walking videos for timing analysis."
     )
-    parser.add_argument(
-        "input_dir",
-        help="Directory containing video files to process.",
-    )
-    parser.add_argument(
-        "--output_dir",
+    parser.add_argument("input_dir",
+                        nargs="?",
+                        default=None,
+                        help="Directory containing video files to process.")
+    parser.add_argument("--input_dir",
+                        dest="input_dir",
+                        help="Directory containing video files to process.")
+    parser.add_argument("--output_dir",
         default=None,
         help="Directory to save output CSVs (default: <input_dir>/output).",
     )
