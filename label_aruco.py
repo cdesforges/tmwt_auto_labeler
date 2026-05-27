@@ -78,7 +78,7 @@ def process_video(video_path, output_path, model_path):
 
     # find first non-black frame
     first_frame_idx = find_first_frame(cap)
-    if not first_frame_idx:
+    if first_frame_idx is None:
         print(f"The whole video appeared to be black frames... exiting")
         return
 

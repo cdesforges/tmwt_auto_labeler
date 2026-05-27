@@ -9,7 +9,7 @@ Displays the first frame of a video and lets the user:
 
 import cv2
 import numpy as np
-from pose import detect_poses, detect_poses_image, draw_pose, get_pose_center, get_ankle_midpoint
+from pose import detect_poses_image, draw_pose, get_ankle_midpoint
 
 # ---- State for mouse callbacks ----
 
@@ -198,17 +198,82 @@ def select_person(frame_bgr, landmarker):
 
 
 
+def _detect_aruco_near_endpoint(detector, frame_bgr):
+    """Detect exactly one ArUco marker and return its top-right corner, or None."""
+    corners, ids, _ = detector.detectMarkers(frame_bgr)
+    print(f"ids = {ids}")
+    if ids is not None and len(ids.flatten()) == 1:
+        return tuple(corners[0][0][2].astype(int))
+    return None
+
+
+def _prompt_far_endpoint_manual_start(frame_bgr, near_ep):
+    """
+    Show the manual-start warning and ask the user to click the far endpoint.
+    Returns the clicked (x, y), or None if the user quit.
+    """
+    window = "Manual Start"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(window, _on_mouse_click)
+    display = frame_bgr.copy()
+    cv2.circle(display, near_ep, 7, (0, 0, 255), -1)
+    cv2.putText(display, "Person not detected, manual timer start needed!",
+                (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 100, 255), 2)
+    cv2.putText(display, "Use the spacebar once the person has started walking.",
+                (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+    cv2.putText(display, "First, click where the person starts walking.",
+                (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    cv2.imshow(window, display)
+    click = _wait_for_click_or_key(window)
+    cv2.destroyWindow(window)
+    return click
+
+
+def _verify_endpoints(frame_bgr, far_ep, near_ep, manual_start_mode):
+    """
+    Show both endpoints and wait for confirmation.
+    Returns (far_ep, near_ep, manual_start_mode) on confirm, or (None, None, False) on quit.
+    """
+    window = "Verify Endpoints"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    display = frame_bgr.copy()
+    cv2.circle(display, far_ep, 7, (255, 0, 0), -1)
+    cv2.circle(display, near_ep, 7, (0, 0, 255), -1)
+    cv2.line(display, far_ep, near_ep, (0, 255, 255), 2)
+    prompt = (
+        "Press any key to BEGIN (spacebar will start the timer), or 'q' to quit"
+        if manual_start_mode
+        else "Press any key to confirm, or 'q' to quit"
+    )
+    cv2.putText(display, prompt, (20, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    cv2.imshow(window, display)
+    key = cv2.waitKey(0) & 0xFF
+    cv2.destroyWindow(window)
+    if key == ord("q"):
+        return None, None, False
+    return far_ep, near_ep, manual_start_mode
+
+
 def detect_endpoints(cap, detector, landmarker):
     """
-    Returns (far_ep, near_ep, manual_start_mode):
-      far_ep: (x, y) far rope endpoint, or None if pose was not detected.
-      near_ep: (x, y) near rope endpoint from the ArUco marker.
-      manual_start_mode: True if pose was not detected and the user must
-        drive timing with spacebar in the main loop.
-      Returns (None, None, False) on failure.
+    Determine the far and near rope endpoints for one video.
+
+    Strategy (in order):
+      1. Pose detection at frame 0 → ankle midpoint becomes far_ep
+      2. ArUco marker (exactly one) → corner becomes near_ep
+      3. Pose missed, ArUco worked → user clicks far_ep; manual_start_mode=True
+         (spacebar drives the timer because pose can't be trusted at start)
+      4. ArUco missed → user clicks BOTH endpoints via select_rope_endpoints;
+         manual_start_mode=False (the user-defined far_ep is a valid start line,
+         so the auto-timer's crossing logic can fire as normal)
+
+    Returns:
+      (far_ep, near_ep, manual_start_mode) on success.
+      (None, None, False) on failure / user cancellation.
     """
     if not cap.isOpened():
-        print(f"  ERROR: Detect endpoints was passed an unopened cap object!")
+        print("  ERROR: Detect endpoints was passed an unopened cap object!")
         return None, None, False
 
     ret, frame_bgr = cap.read()
@@ -217,63 +282,22 @@ def detect_endpoints(cap, detector, landmarker):
         return None, None, False
 
     _, far_ep = select_person(frame_bgr, landmarker)
-    manual_start_mode = far_ep is None
+    near_ep = _detect_aruco_near_endpoint(detector, frame_bgr)
 
-    corners, ids, rejected = detector.detectMarkers(frame_bgr)
-    print(f"ids = {ids}")
-    near_ep = None
-    if ids is not None and len(ids.flatten()) == 1:
-        near_ep = tuple(corners[0][0][2].astype(int))
+    # Branch 1: ArUco missing — fully manual two-click selection. Auto-timer enabled.
     if near_ep is None:
-        print("  ERROR: Need exactly one ArUco marker in the first frame.")
-        return None, None, False
-
-    window = "Verify Endpoints"
-    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback(window, _on_mouse_click)
-
-    # In manual-start mode, ask the user to click where the person starts walking
-    # so the rope direction (far→near) is still defined for end-detection.
-    if manual_start_mode:
-        display = frame_bgr.copy()
-        cv2.circle(display, near_ep, 7, (0, 0, 255), -1)
-        cv2.putText(
-            display, "Person not detected, manual timer start needed!",
-            (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 100, 255), 2,
-        )
-        cv2.putText(
-            display, "Use the spacebar once the person has started walking.",
-            (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2,
-        )
-        cv2.putText(
-            display, "First, click where the person starts walking.",
-            (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2,
-        )
-        cv2.imshow(window, display)
-        click = _wait_for_click_or_key(window)
-        if click is None:
-            cv2.destroyWindow(window)
+        print("  No single ArUco marker detected — falling back to manual endpoint selection.")
+        far_ep, near_ep = select_rope_endpoints(frame_bgr)
+        if far_ep is None or near_ep is None:
             return None, None, False
-        far_ep = click
+        return far_ep, near_ep, False
 
-    while True:
-        display = frame_bgr.copy()
-        cv2.circle(display, far_ep, 7, (255, 0, 0), -1)
-        cv2.circle(display, near_ep, 7, (0, 0, 255), -1)
-        cv2.line(display, far_ep, near_ep, (0, 255, 255), 2)
-        prompt = (
-            "Press any key to BEGIN (spacebar will start the timer), or 'q' to quit"
-            if manual_start_mode
-            else "Press any key to confirm, or 'q' to quit"
-        )
-        cv2.putText(
-            display, prompt,
-            (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
-        )
-        cv2.imshow(window, display)
-
-        key = cv2.waitKey(0) & 0xFF
-        cv2.destroyWindow(window)
-        if key == ord("q"):
+    # Branch 2: pose missed but ArUco worked — click for far_ep, spacebar timing.
+    if far_ep is None:
+        far_ep = _prompt_far_endpoint_manual_start(frame_bgr, near_ep)
+        if far_ep is None:
             return None, None, False
-        return far_ep, near_ep, manual_start_mode
+        return _verify_endpoints(frame_bgr, far_ep, near_ep, manual_start_mode=True)
+
+    # Branch 3: fully automatic.
+    return _verify_endpoints(frame_bgr, far_ep, near_ep, manual_start_mode=False)

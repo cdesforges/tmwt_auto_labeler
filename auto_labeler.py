@@ -2,7 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-VIDEO_PATH = "media/SV_10MWRT_string.MOV"
+VIDEO_PATH = "media/no_aruco/SV_10MWRT_string.MOV"
 MODEL_PATH = "models/pose_landmarker_full.task"
 
 # ------------------ Pose skeleton + params ------------------
