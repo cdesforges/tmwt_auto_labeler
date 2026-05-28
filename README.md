@@ -19,7 +19,7 @@ pip install requirements.txt
 
 #### After, you call the script like so:
 ```
-python3 label_aruco.py <input directory> --output_dir <output directory>
+python3 label_aruco.py --input_dir <input directory> --output_dir <output directory>
 ```
 
 In this call, ```<input directory>``` contains all of the video files you want to label and ```<output directory>``` tells the script where to store the 3D point results.
