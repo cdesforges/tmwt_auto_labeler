@@ -42,9 +42,9 @@ def create_landmarker(model_path=DEFAULT_MODEL_PATH, num_poses=1):
         base_options=mp_tasks.BaseOptions(model_asset_path=model_path),
         running_mode=mp_tasks.vision.RunningMode.VIDEO,
         num_poses=num_poses,
-        min_pose_detection_confidence=0.8,
-        min_pose_presence_confidence=0.8,
-        min_tracking_confidence=0.8,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
     )
     return mp_tasks.vision.PoseLandmarker.create_from_options(options)
 
@@ -56,8 +56,8 @@ def create_image_landmarker(model_path=DEFAULT_MODEL_PATH, num_poses=1):
         base_options=mp_tasks.BaseOptions(model_asset_path=model_path),
         running_mode=mp_tasks.vision.RunningMode.IMAGE,
         num_poses=num_poses,
-        min_pose_detection_confidence=0.8,
-        min_pose_presence_confidence=0.8,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
     )
     return mp_tasks.vision.PoseLandmarker.create_from_options(options)
 

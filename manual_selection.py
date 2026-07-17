@@ -9,7 +9,6 @@ Displays the first frame of a video and lets the user:
 
 import cv2
 import numpy as np
-from pose import detect_poses_image, draw_pose, get_ankle_midpoint
 
 # ---- State for mouse callbacks ----
 
@@ -123,31 +122,38 @@ def select_rope_endpoints(frame_bgr):
             return far_ep, near_ep
 
 
-def select_person(frame_bgr, landmarker):
+def select_person(frame_bgr, landmarker, backend):
     """
     Detect all poses in the first frame and let the user click on the
     person they want to track.
 
-    If only one person is detected, that person is selected automatically.
-
     Args:
         frame_bgr: The first frame of the video.
-        landmarker: A MediaPipe PoseLandmarker instance.
+        landmarker: A pose landmarker instance from `backend`.
+        backend: Pose backend module (see pose_backend.get_backend).
 
     Returns:
         (pose_index, initial_center) — the index and ankle-center (x, y) of the
-        selected pose, or (None, None) if no poses detected or user quits.
+        selected pose, or (None, None) if no usable poses or user quits.
     """
-    all_poses = detect_poses_image(landmarker, frame_bgr)
+    all_poses = backend.detect_poses_image(landmarker, frame_bgr)
 
-    if not all_poses:
+    # Keep only poses with a resolvable ankle midpoint — some backends may
+    # return a pose whose ankle landmarks were dropped below the confidence
+    # threshold, and downstream code needs a real (x, y) far_ep.
+    poses_with_centers = []
+    for pose_lm in all_poses:
+        center = backend.get_ankle_midpoint(pose_lm, frame_bgr.shape)
+        if center is not None:
+            poses_with_centers.append((pose_lm, center))
+
+    if not poses_with_centers:
         print("  No poses detected in first frame.")
         return None, None
 
-    if len(all_poses) == 1:
+    if len(poses_with_centers) == 1:
         print("  Single person detected — auto-selected.")
-        center = get_ankle_midpoint(all_poses[0], frame_bgr.shape)
-        return 0, center
+        return 0, poses_with_centers[0][1]
 
     # Multiple people: draw them all with different colors and ask user to click
     colors = [
@@ -164,12 +170,10 @@ def select_person(frame_bgr, landmarker):
 
     display = frame_bgr.copy()
     centers = []
-    for i, pose_lm in enumerate(all_poses):
+    for i, (pose_lm, center) in enumerate(poses_with_centers):
         color = colors[i % len(colors)]
-        draw_pose(display, pose_lm, color=color)
-        center = get_ankle_midpoint(pose_lm, frame_bgr.shape)
+        backend.draw_pose(display, pose_lm, color=color)
         centers.append(center)
-        # Label each person with a number
         cv2.putText(
             display, str(i + 1), (center[0] - 10, center[1] - 20),
             cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2,
@@ -177,7 +181,7 @@ def select_person(frame_bgr, landmarker):
 
     cv2.putText(
         display,
-        f"{len(all_poses)} people detected. Click the person to track.",
+        f"{len(poses_with_centers)} people detected. Click the person to track.",
         (20, 30),
         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
     )
@@ -189,11 +193,10 @@ def select_person(frame_bgr, landmarker):
     if click is None:
         return None, None
 
-    # Find the person whose center is closest to the click
     click_arr = np.array(click, dtype=np.float32)
     dists = [np.linalg.norm(np.array(c, dtype=np.float32) - click_arr) for c in centers]
     selected = int(np.argmin(dists))
-    print(f"  Selected person {selected + 1} of {len(all_poses)}.")
+    print(f"  Selected person {selected + 1} of {len(poses_with_centers)}.")
     return selected, centers[selected]
 
 
@@ -255,7 +258,7 @@ def _verify_endpoints(frame_bgr, far_ep, near_ep, manual_start_mode):
     return far_ep, near_ep, manual_start_mode
 
 
-def detect_endpoints(cap, detector, landmarker):
+def detect_endpoints(cap, detector, landmarker, backend):
     """
     Determine the far and near rope endpoints for one video.
 
@@ -268,20 +271,29 @@ def detect_endpoints(cap, detector, landmarker):
          manual_start_mode=False (the user-defined far_ep is a valid start line,
          so the auto-timer's crossing logic can fire as normal)
 
+    Args:
+        cap, detector, landmarker: video capture, aruco detector, backend landmarker.
+        backend: pose backend module (see pose_backend.get_backend).
+
     Returns:
-      (far_ep, near_ep, manual_start_mode) on success.
-      (None, None, False) on failure / user cancellation.
+      (far_ep, near_ep, manual_start_mode, pose_placed_far_ep) on success.
+      (None, None, False, False) on failure / user cancellation.
+
+      pose_placed_far_ep is True only when far_ep came from the pose detector
+      itself (branch 3). Downstream timer logic uses this to decide whether the
+      "crossing at t=0" start path is safe (it isn't when far_ep IS the subject's
+      standstill position — ankle noise will trigger it prematurely).
     """
     if not cap.isOpened():
         print("  ERROR: Detect endpoints was passed an unopened cap object!")
-        return None, None, False
+        return None, None, False, False
 
     ret, frame_bgr = cap.read()
     if not ret:
         print("  ERROR: Could not read first frame.")
-        return None, None, False
+        return None, None, False, False
 
-    _, far_ep = select_person(frame_bgr, landmarker)
+    _, far_ep = select_person(frame_bgr, landmarker, backend)
     near_ep = _detect_aruco_near_endpoint(detector, frame_bgr)
 
     # Branch 1: ArUco missing — fully manual two-click selection. Auto-timer enabled.
@@ -289,15 +301,25 @@ def detect_endpoints(cap, detector, landmarker):
         print("  No single ArUco marker detected — falling back to manual endpoint selection.")
         far_ep, near_ep = select_rope_endpoints(frame_bgr)
         if far_ep is None or near_ep is None:
-            return None, None, False
-        return far_ep, near_ep, False
+            return None, None, False, False
+        return far_ep, near_ep, False, False
 
     # Branch 2: pose missed but ArUco worked — click for far_ep, spacebar timing.
     if far_ep is None:
         far_ep = _prompt_far_endpoint_manual_start(frame_bgr, near_ep)
         if far_ep is None:
-            return None, None, False
-        return _verify_endpoints(frame_bgr, far_ep, near_ep, manual_start_mode=True)
+            return None, None, False, False
+        far_ep, near_ep, manual_start_mode = _verify_endpoints(
+            frame_bgr, far_ep, near_ep, manual_start_mode=True
+        )
+        if far_ep is None:
+            return None, None, False, False
+        return far_ep, near_ep, manual_start_mode, False
 
-    # Branch 3: fully automatic.
-    return _verify_endpoints(frame_bgr, far_ep, near_ep, manual_start_mode=False)
+    # Branch 3: fully automatic — far_ep IS the subject's standstill position.
+    far_ep, near_ep, manual_start_mode = _verify_endpoints(
+        frame_bgr, far_ep, near_ep, manual_start_mode=False
+    )
+    if far_ep is None:
+        return None, None, False, False
+    return far_ep, near_ep, manual_start_mode, True
