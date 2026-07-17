@@ -87,10 +87,11 @@ class FrameDataRecorder:
             "t_along": round(t_along, 6) if t_along is not None else "",
         }
 
-        # Add all 33 landmark positions (normalized)
+        # Add all 33 landmark positions (normalized).
+        # Some backends (e.g. mmpose) leave unmapped slots as None.
         for i in range(NUM_LANDMARKS):
-            if pose_landmarks and i < len(pose_landmarks):
-                lm = pose_landmarks[i]
+            lm = pose_landmarks[i] if (pose_landmarks and i < len(pose_landmarks)) else None
+            if lm is not None:
                 row[f"lm_{i:02d}_x"] = round(lm.x, 6)
                 row[f"lm_{i:02d}_y"] = round(lm.y, 6)
                 row[f"lm_{i:02d}_z"] = round(lm.z, 6)
