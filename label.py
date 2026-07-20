@@ -30,6 +30,7 @@ import sys
 import cv2
 import numpy as np
 
+import metric
 from pose_backend import get_backend
 from tracking import GroundTracker
 from manual_selection import detect_endpoints
@@ -41,6 +42,14 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v"}
 # Width (px) of the side panel composed next to each frame in the display
 # and annotated output video.
 PANEL_W = 300
+
+# Real length of the walking course, in metres. far_ep is 0 m, near_ep is COURSE_M.
+COURSE_M = 10.0
+
+# Forward displacement a foot must make from its standstill position before the
+# walk is considered started. This is a TRUE metric distance — it is applied by
+# the post-pass refinement in metric.py, which perspective-corrects the track.
+MOTION_THRESHOLD_M = 0.05
 
 # set up aruco stuff
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50)
@@ -209,6 +218,32 @@ def process_video(video_path, output_path, model_path, backend):
     print(f"  Done. Processed {final_frame_idx} frames.")
 
 
+def _to_reference_frame(H, points):
+    """
+    Map current-frame pixel points back into first-frame (reference) coordinates.
+
+    The ground tracker gives H mapping reference -> current, so we apply its
+    inverse. Doing this keeps the accumulated walk track in one consistent frame
+    even when the camera drifts, so the vanishing-point fit stays valid.
+    """
+    if H is None:
+        return list(points)
+    try:
+        H_inv = np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        return list(points)
+    pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    out = cv2.perspectiveTransform(pts, H_inv)
+    return [(float(p[0][0]), float(p[0][1])) for p in out]
+
+
+def _landmark_px(lm, frame_w, frame_h):
+    """Landmark to (x, y) pixels, or None if the backend dropped it."""
+    if lm is None:
+        return None
+    return (lm.x * frame_w, lm.y * frame_h)
+
+
 def _project_ankle(lm, frame_w, frame_h, far_ep_curr, near_ep_curr):
     """
     Project one ankle landmark onto the rope direction and return its t_along,
@@ -245,9 +280,11 @@ def run_walk_pass(cap, first_frame_idx, fps, delay,
     SMOOTH_ALPHA = 0.7
     FAR_T = 0.0
     NEAR_T = 1.0
-    # Fraction of the rope the subject must move forward from their standstill
-    # position to be considered "walking". 0.5% ≈ 5cm on a 10m course — small
-    # enough to fire quickly, may occasionally trigger on ankle-keypoint noise.
+    # PROVISIONAL live trigger, in image-space t_along units. This is NOT a fixed
+    # real distance: because of perspective its true size varies ~8x across the
+    # course (0.005 is ~15 cm at the far end but ~2 cm near the camera). It only
+    # drives the live on-screen timer; the returned start time is corrected
+    # afterwards by the metric refinement below, which works in real metres.
     MOTION_THRESHOLD = 0.005
 
     prev_t_smooth = None
@@ -266,6 +303,9 @@ def run_walk_pass(cap, first_frame_idx, fps, delay,
     # Latest per-foot motion values, exposed for the debug panel.
     left_motion = None
     right_motion = None
+    # Walk track in REFERENCE-frame coords, accumulated for the post-pass
+    # vanishing-point fit and metric start refinement.
+    track = []
     frame_idx = 0
 
     spacebar_active = manual_start_mode or full_manual
@@ -323,6 +363,25 @@ def run_walk_pass(cap, first_frame_idx, fps, delay,
                     left_t = _project_ankle(left_lm, w_f, h_f, far_ep_curr, near_ep_curr)
                     right_t = _project_ankle(right_lm, w_f, h_f, far_ep_curr, near_ep_curr)
 
+                    # Accumulate the track for the post-pass metric refinement.
+                    # Everything is back-projected into reference-frame coords so
+                    # camera drift doesn't corrupt the vanishing-point fit.
+                    head_px = _landmark_px(pose_lm[backend.NOSE_IDX], w_f, h_f)
+                    left_px = _landmark_px(left_lm, w_f, h_f)
+                    right_px = _landmark_px(right_lm, w_f, h_f)
+                    if head_px is not None:
+                        ref_pts = _to_reference_frame(
+                            H, [body_px, head_px,
+                                left_px or body_px, right_px or body_px]
+                        )
+                        track.append({
+                            "time_s": time_s,
+                            "foot": ref_pts[0],
+                            "head": ref_pts[1],
+                            "left_ankle": ref_pts[2] if left_px else None,
+                            "right_ankle": ref_pts[3] if right_px else None,
+                        })
+
                     # Track the standstill baseline for each foot.
                     if walk_start_time is None:
                         if left_t is not None and (left_baseline_t is None or left_t < left_baseline_t):
@@ -335,28 +394,32 @@ def run_walk_pass(cap, first_frame_idx, fps, delay,
                     left_motion = (left_t - left_baseline_t) if (left_t is not None and left_baseline_t is not None) else None
                     right_motion = (right_t - right_baseline_t) if (right_t is not None and right_baseline_t is not None) else None
 
-                    # Pose-based START: only in pure auto mode
+                    # Pose-based START: only in pure auto mode. Case A and Case B
+                    # are mutually exclusive by branch:
+                    #   - User-clicked far_ep (line semantics)   → Case A only
+                    #   - Pose-placed far_ep (subject position)  → Case B only
                     if not (manual_start_mode or full_manual) and walk_start_time is None:
-                        # Case A: person was behind the user-specified start line and
-                        # crossed it — interpolate the sub-frame crossing moment.
-                        # DISABLED when far_ep came from the pose detector itself.
-                        if (not pose_placed_far_ep
-                                and prev_t_smooth is not None
-                                and prev_t_smooth < FAR_T
-                                and t_smooth >= FAR_T):
-                            frac = (FAR_T - prev_t_smooth) / (t_smooth - prev_t_smooth) if t_smooth != prev_t_smooth else 0.0
-                            walk_start_time = prev_time_s + frac * (time_s - prev_time_s)
-                            print(f"  Walk STARTED at {walk_start_time:.3f}s (crossing)")
-                        # Case B: motion-threshold — fire when EITHER foot has moved
-                        # MOTION_THRESHOLD past its own baseline. walk_start_time is
-                        # set to that foot's baseline timestamp (when it was closest
-                        # to standstill just before lifting).
-                        elif left_motion is not None and left_motion >= MOTION_THRESHOLD:
-                            walk_start_time = left_baseline_time
-                            print(f"  Walk STARTED at {walk_start_time:.3f}s (motion: left foot)")
-                        elif right_motion is not None and right_motion >= MOTION_THRESHOLD:
-                            walk_start_time = right_baseline_time
-                            print(f"  Walk STARTED at {walk_start_time:.3f}s (motion: right foot)")
+                        if not pose_placed_far_ep:
+                            # Case A: user picked far_ep as the start LINE. Fire the
+                            # moment the ankle-midpoint's smoothed t_along crosses it
+                            # from below; interpolate the sub-frame moment.
+                            if (prev_t_smooth is not None
+                                    and prev_t_smooth < FAR_T
+                                    and t_smooth >= FAR_T):
+                                frac = (FAR_T - prev_t_smooth) / (t_smooth - prev_t_smooth) if t_smooth != prev_t_smooth else 0.0
+                                walk_start_time = prev_time_s + frac * (time_s - prev_time_s)
+                                print(f"  Walk STARTED at {walk_start_time:.3f}s (crossing)")
+                        else:
+                            # Case B: far_ep IS the subject's standstill position, so
+                            # crossing it is ill-defined. Fire when EITHER foot has
+                            # moved MOTION_THRESHOLD past its own baseline. Report the
+                            # baseline timestamp of the foot that lifted first.
+                            if left_motion is not None and left_motion >= MOTION_THRESHOLD:
+                                walk_start_time = left_baseline_time
+                                print(f"  Walk STARTED at {walk_start_time:.3f}s (motion: left foot)")
+                            elif right_motion is not None and right_motion >= MOTION_THRESHOLD:
+                                walk_start_time = right_baseline_time
+                                print(f"  Walk STARTED at {walk_start_time:.3f}s (motion: right foot)")
 
                     # Pose-based END: any mode except full_manual
                     if not full_manual and walk_start_time is not None and walk_end_time is None:
@@ -433,7 +496,7 @@ def run_walk_pass(cap, first_frame_idx, fps, delay,
             cv2.putText(panel, f"{walk_duration:.3f}s", (x0, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
             y_pos += 30
-            speed = 10.0 / walk_duration
+            speed = COURSE_M / walk_duration
             cv2.putText(panel, f"{speed:.2f} m/s", (x0, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 0), 2)
         elif walk_start_time is not None:
@@ -466,19 +529,21 @@ def run_walk_pass(cap, first_frame_idx, fps, delay,
             cv2.putText(panel, f"t_along:  {t_along:+.3f}", (x0, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 120, 120), 1)
             y_pos += 22
-            # Distance from camera, assuming 10m course (near_ep is camera-side).
-            dist_from_cam = (1.0 - t_along) * 10.0
-            cv2.putText(panel, f"Dist cam: {dist_from_cam:5.2f}m", (x0, y_pos),
+            # Image-space distance estimate. Marked "~" because it is NOT
+            # perspective-corrected — it can be several metres optimistic mid-course.
+            # The perspective-correct values are produced by the post-pass refinement.
+            dist_from_cam = (1.0 - t_along) * COURSE_M
+            cv2.putText(panel, f"~Dist cam:{dist_from_cam:5.2f}m", (x0, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 200, 120), 1)
             y_pos += 22
-            # Per-foot motion above baseline. Only meaningful before start; hidden after.
+            # Per-foot motion above baseline, in raw t_along units (not metres —
+            # see MOTION_THRESHOLD note above). Only meaningful before start.
             if walk_start_time is None:
                 for label, motion in (("L foot:", left_motion), ("R foot:", right_motion)):
                     if motion is None:
                         continue
-                    motion_m = motion * 10.0
                     color = (0, 255, 0) if motion >= MOTION_THRESHOLD else (120, 120, 120)
-                    cv2.putText(panel, f"{label} {motion_m:+.2f}m", (x0, y_pos),
+                    cv2.putText(panel, f"{label} {motion:+.4f}t", (x0, y_pos),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
                     y_pos += 22
 
@@ -512,7 +577,57 @@ def run_walk_pass(cap, first_frame_idx, fps, delay,
 
         frame_idx += 1
 
+    # --- Post-pass metric refinement of the start time ---
+    # The live trigger fires on an image-space threshold whose real size varies
+    # with distance. Now that the whole track is available we can recover the
+    # walking direction's vanishing point and redo the start detection against a
+    # true metric threshold. Only applies to the pose-auto path — the manual
+    # modes take their start from the user's spacebar, which needs no correction.
+    if (walk_start_time is not None
+            and pose_placed_far_ep
+            and not (manual_start_mode or full_manual)):
+        walk_start_time, walk_duration = _refine_start_metric(
+            track, far_ep, near_ep, walk_start_time, walk_end_time
+        )
+
     return walk_start_time, walk_end_time, walk_duration, frame_idx
+
+
+def _refine_start_metric(track, far_ep, near_ep, provisional_start, walk_end_time):
+    """
+    Recompute the walk start using a true metric threshold.
+
+    Returns (start_time, duration). Falls back to the provisional start — and
+    says why — whenever the geometry can't be recovered reliably.
+    """
+    foot_pts = [s["foot"] for s in track if s.get("foot")]
+    head_pts = [s["head"] for s in track if s.get("head")]
+
+    V, info = metric.estimate_vanishing_point(foot_pts, head_pts)
+    if V is None:
+        print(f"  Metric refinement skipped ({info.get('reason', 'unknown')}); "
+              f"keeping image-space start {provisional_start:.3f}s")
+        return provisional_start, (walk_end_time - provisional_start
+                                   if walk_end_time is not None else None)
+
+    refined, which_foot = metric.refine_start_time(
+        track, far_ep, near_ep, V, MOTION_THRESHOLD_M, COURSE_M
+    )
+    if refined is None:
+        print(f"  Metric refinement found no {MOTION_THRESHOLD_M*100:.0f}cm displacement; "
+              f"keeping image-space start {provisional_start:.3f}s")
+        return provisional_start, (walk_end_time - provisional_start
+                                   if walk_end_time is not None else None)
+
+    delta = refined - provisional_start
+    print(f"  Walk START refined to {refined:.3f}s "
+          f"({MOTION_THRESHOLD_M*100:.0f}cm true displacement, {which_foot} foot, "
+          f"{delta:+.3f}s vs image-space estimate)")
+    duration = walk_end_time - refined if walk_end_time is not None else None
+    if duration is not None:
+        print(f"  Corrected duration: {duration:.3f}s "
+              f"({COURSE_M/duration:.2f} m/s)")
+    return refined, duration
 
 
 def prompt_full_manual_retry(frame_bgr):
