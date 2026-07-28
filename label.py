@@ -30,6 +30,7 @@ import sys
 import cv2
 import numpy as np
 
+import matte
 import metric
 from pose_backend import get_backend
 from tracking import GroundTracker
@@ -75,7 +76,7 @@ def find_videos(input_dir):
     return sorted(videos)
 
 
-def process_video(video_path, output_path, model_path, backend):
+def process_video(video_path, output_path, model_path, backend, matte_crop=True):
     """
     Process a single video: manual selection, tracking, and data export.
 
@@ -84,6 +85,8 @@ def process_video(video_path, output_path, model_path, backend):
         output_path: Path to save the output CSV.
         model_path: Path/alias for the pose model (backend-specific).
         backend: Pose backend module (see pose_backend.get_backend).
+        matte_crop: If True, auto-detect and crop solid-color mattes
+            (letterbox / pillarbox bars) around the active picture.
     """
     print(f"\n{'='*60}")
     print(f"Processing: {os.path.basename(video_path)}")
@@ -100,6 +103,24 @@ def process_video(video_path, output_path, model_path, backend):
     if first_frame_idx is None:
         print(f"The whole video appeared to be black frames... exiting")
         return
+
+    # [Step 0] Detect and crop solid-color mattes from the first real frame.
+    # Wrapping the capture makes every subsequent read() return the cropped
+    # picture, so all downstream coordinates share one consistent space.
+    if matte_crop:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, first_frame_idx)
+        ret, probe = cap.read()
+        if ret:
+            crop = matte.detect_content_crop(probe)
+            if matte.is_full_frame(crop, probe.shape):
+                print("  No matte detected — using full frame.")
+            else:
+                x, y, cw, ch = crop
+                ph, pw = probe.shape[:2]
+                print(f"  Matte detected — cropping to {cw}x{ch} at ({x},{y}) "
+                      f"from {pw}x{ph}.")
+                cap = matte.CroppingCapture(cap, crop)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, first_frame_idx)
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -676,6 +697,12 @@ def main():
         default="mediapipe",
         help="Pose backend to use (default: mediapipe).",
     )
+    parser.add_argument(
+        "--no_matte_crop",
+        action="store_true",
+        help="Disable automatic cropping of solid-color mattes "
+             "(letterbox / pillarbox bars) around the active picture.",
+    )
     args = parser.parse_args()
 
     # Validate input directory
@@ -706,7 +733,8 @@ def main():
     for video_path in videos:
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         output_path = os.path.join(output_dir, f"{video_name}.csv")
-        process_video(video_path, output_path, model_path, backend)
+        process_video(video_path, output_path, model_path, backend,
+                      matte_crop=not args.no_matte_crop)
 
     print(f"\nAll done! Output files are in '{output_dir}'.")
 

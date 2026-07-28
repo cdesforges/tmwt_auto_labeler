@@ -46,6 +46,7 @@ python label.py --input_dir <videos_dir> [options]
 | `--output_dir` |          | `<input_dir>/output`                   | Directory to write output CSVs and videos.                                                                               |
 | `--backend`    |          | `mediapipe`                            | Pose backend. One of `mediapipe`, `mmpose`, `rtmlib`.                                                                    |
 | `--model`      |          | _(backend-specific)_                   | Pose model. Interpretation depends on the backend (see below).                                                           |
+| `--no_matte_crop` |       | _off (cropping enabled)_               | Disable automatic cropping of solid-color mattes (letterbox / pillarbox bars) around the active picture.                 |
 
 #### `--model` values by backend
 
@@ -80,6 +81,18 @@ RTMLIB_DEVICE=cpu python label.py --input_dir media/session1 --backend rtmlib
 ```
 
 ---
+
+## Matte cropping
+
+Video shot or exported on phones is often padded with solid black, grey, or
+white bars (letterbox / pillarbox) so the active picture fills only part of the
+frame. Before processing, the labeler inspects the first frame, detects any such
+matte, and crops every frame to the active-picture rectangle — recovering pose-
+detector resolution and keeping ArUco and ground tracking on real content.
+
+Detection is automatic and a no-op when no matte is present. Pass
+`--no_matte_crop` to disable it. All output coordinates and videos are in the
+cropped frame's space.
 
 ## Endpoint detection
 
