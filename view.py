@@ -260,7 +260,59 @@ def get_walk_state_at_frame(frame_data, walk_start_time, walk_end_time, walk_dur
     return None, None, None
 
 
-def play_csv(csv_path):
+def compute_content_bounds(frames, frame_w, frame_h, margin=40):
+    """
+    Bounding box of everything actually drawn across the whole recording —
+    every skeleton landmark, body point, and rope endpoint.
+
+    This is view.py's analog of label.py's matte cropping. There is no video
+    matte to detect here (playback is drawn on a generated canvas), but a
+    recording often occupies just part of the frame, leaving dead margins. It
+    also recovers CSVs recorded before matte cropping existed, whose stored
+    frame_w/frame_h still span the original matted frame.
+
+    Args:
+        frames: parsed CSV rows.
+        frame_w, frame_h: canvas size recorded in the CSV.
+        margin: padding in pixels kept around the content.
+
+    Returns:
+        (x, y, w, h) to crop the canvas to, clamped to the canvas. Falls back to
+        the full canvas when nothing was drawn.
+    """
+    xs, ys = [], []
+
+    for fd in frames:
+        for key_x, key_y in (("body_x", "body_y"),
+                             ("far_ep_x", "far_ep_y"),
+                             ("near_ep_x", "near_ep_y")):
+            x, y = fd.get(key_x), fd.get(key_y)
+            if x is not None and y is not None:
+                xs.append(x)
+                ys.append(y)
+
+        for i in range(NUM_LANDMARKS):
+            lx = fd.get(f"lm_{i:02d}_x")
+            ly = fd.get(f"lm_{i:02d}_y")
+            if lx is not None and ly is not None:
+                xs.append(lx * frame_w)
+                ys.append(ly * frame_h)
+
+    if not xs:
+        return (0, 0, frame_w, frame_h)
+
+    x0 = max(0, int(min(xs)) - margin)
+    y0 = max(0, int(min(ys)) - margin)
+    x1 = min(frame_w, int(max(xs)) + margin)
+    y1 = min(frame_h, int(max(ys)) + margin)
+
+    if x1 - x0 < 16 or y1 - y0 < 16:
+        return (0, 0, frame_w, frame_h)
+
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
+def play_csv(csv_path, crop_to_content=True):
     """
     Play back a single CSV file as a skeleton-only visualization.
 
@@ -299,6 +351,15 @@ def play_csv(csv_path):
 
     print(f"  Frames: {len(frames)}, Size: {frame_w}x{frame_h}, Delay: {delay}ms")
 
+    # Crop playback to the region that actually contains drawn content.
+    crop = (0, 0, frame_w, frame_h)
+    if crop_to_content:
+        crop = compute_content_bounds(frames, frame_w, frame_h)
+        if crop[2] < frame_w or crop[3] < frame_h:
+            print(f"  Cropping view to content: {crop[2]}x{crop[3]} "
+                  f"at ({crop[0]},{crop[1]})")
+    crop_x, crop_y, crop_w, crop_h = crop
+
     panel_w = 300
     paused = False
     frame_i = 0
@@ -334,9 +395,13 @@ def play_csv(csv_path):
             if body_x is not None and body_y is not None:
                 cv2.circle(canvas, (int(body_x), int(body_y)), 5, (0, 0, 255), -1)
 
-        # --- Side panel ---
+        # Crop to the content region (drawing happens in full-canvas coords,
+        # so this must come after all drawing).
+        canvas = canvas[crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
+
+        # --- Side panel --- (sized to the cropped canvas so hstack aligns)
         ds, de, dd = get_walk_state_at_frame(fd, walk_start_time, walk_end_time, walk_duration)
-        panel = draw_panel(frame_h, panel_w, fd, ds, de, dd, file_name)
+        panel = draw_panel(crop_h, panel_w, fd, ds, de, dd, file_name)
 
         # Combine canvas + panel
         combined = np.hstack([canvas, panel])
@@ -372,6 +437,12 @@ def main():
         "input_dir",
         help="Directory containing CSV files from label.py.",
     )
+    parser.add_argument(
+        "--no_content_crop",
+        action="store_true",
+        help="Disable cropping playback to the region containing drawn content; "
+             "show the full recorded frame instead.",
+    )
     args = parser.parse_args()
 
     if not os.path.isdir(args.input_dir):
@@ -394,7 +465,7 @@ def main():
         print(f"  - {os.path.basename(c)}")
 
     for csv_path in csvs:
-        play_csv(csv_path)
+        play_csv(csv_path, crop_to_content=not args.no_content_crop)
 
     print("\nDone.")
 

@@ -94,6 +94,12 @@ Detection is automatic and a no-op when no matte is present. Pass
 `--no_matte_crop` to disable it. All output coordinates and videos are in the
 cropped frame's space.
 
+`view.py` applies the same idea at playback. It has no video to inspect — it
+draws on a generated canvas — so instead it crops to the bounding box of
+everything actually recorded (skeleton, body point, rope endpoints) plus a small
+margin. This removes dead margins and also tightens up CSVs recorded before
+matte cropping existed. Pass `--no_content_crop` to see the full recorded frame.
+
 ## Endpoint detection
 
 For each video, the labeler establishes two rope endpoints:
@@ -143,8 +149,12 @@ The skeleton viewer plays back a saved CSV as a skeleton-only visualization —
 no video frames required.
 
 ```bash
-python view.py <csv_directory>
+python view.py <csv_directory> [--no_content_crop]
 ```
+
+| Flag                | Default                 | Description                                                                     |
+|---------------------|-------------------------|---------------------------------------------------------------------------------|
+| `--no_content_crop` | _off (cropping enabled)_| Show the full recorded frame instead of cropping to the drawn-content bounds.    |
 
 Playback controls:
 
