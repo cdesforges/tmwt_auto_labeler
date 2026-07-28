@@ -17,27 +17,46 @@ line that carries real picture content.
 import cv2
 import numpy as np
 
-# A line (row/column) counts as matte only if its per-pixel spread is below this.
-# Measured matte bars sit near 0-1; real content rows are 20+.
-DEFAULT_STD_THRESH = 6.0
+# How far a pixel may sit from the matte's seed color (L1 across B,G,R) and
+# still count as matte. ~10 per channel.
+DEFAULT_COLOR_TOL = 30.0
 
-# ...and its mean color must stay within this L1 distance of the seed color,
-# so a coincidentally-flat content band of a different shade isn't eaten.
-DEFAULT_COLOR_TOL = 14.0
+# Fraction of a line's pixels that must be within COLOR_TOL for it to count as
+# matte. Deliberately below 1.0: video compression puts ringing artifacts in
+# otherwise-flat matte bars near the picture edge, and a handful of outlier
+# pixels must not disqualify the line. Measured on real footage, matte lines
+# score >= 0.986 (even the noisy ones) while content lines score <= 0.04, so
+# anything in that gap works.
+DEFAULT_MIN_MATTE_FRAC = 0.90
+
+# A line this uniform against its own median is treated as a fresh matte band,
+# letting the scan cross a colour change (e.g. a grey border over a black bar).
+# Real photographic content essentially never reaches this.
+RESEED_UNIFORM_FRAC = 0.995
 
 # Never trim more than this fraction from any single side — a guard against
-# pathological frames where most of the picture happens to be low-variance.
+# pathological frames where most of the picture happens to be uniform.
 DEFAULT_MAX_CROP_FRAC = 0.45
 
 
-def _scan_edge(lines, std_thresh, color_tol, max_count):
+def _matte_fraction(flat, seed, color_tol):
+    """Fraction of a line's pixels within `color_tol` (L1) of `seed`."""
+    return float((np.abs(flat - seed).sum(axis=1) < color_tol).mean())
+
+
+def _scan_edge(lines, color_tol, min_frac, max_count):
     """
     Count consecutive matte lines from index 0 inward.
+
+    Uses "what fraction of this line matches the matte colour" rather than the
+    line's variance. Variance is unreliable here because compression ringing in
+    a flat bar can spike it well past a content-like value, while the colour
+    itself stays put.
 
     Args:
         lines: array shaped (N, pixels_per_line, channels) ordered from the edge
                inward (so lines[0] is the outermost row/column).
-        std_thresh, color_tol: matte thresholds.
+        color_tol, min_frac: matte thresholds.
         max_count: hard cap on how many lines may be consumed.
 
     Returns:
@@ -46,21 +65,32 @@ def _scan_edge(lines, std_thresh, color_tol, max_count):
     """
     if len(lines) == 0:
         return 0
-    seed = lines[0].reshape(-1, lines.shape[-1]).mean(axis=0)
+
+    channels = lines.shape[-1]
+    seed = np.median(lines[0].reshape(-1, channels).astype(np.float32), axis=0)
+
     count = 0
     for i in range(min(len(lines), max_count)):
-        flat = lines[i].reshape(-1, lines.shape[-1]).astype(np.float32)
-        if flat.std() >= std_thresh:
-            break
-        if np.abs(flat.mean(axis=0) - seed).sum() > color_tol:
-            break
-        count += 1
+        flat = lines[i].reshape(-1, channels).astype(np.float32)
+        if _matte_fraction(flat, seed, color_tol) >= min_frac:
+            count += 1
+            continue
+
+        # Colour changed. If this line is near-perfectly uniform it is a new
+        # matte band, so adopt its colour and keep going; otherwise it is
+        # picture content and the matte ends here.
+        own_seed = np.median(flat, axis=0)
+        if _matte_fraction(flat, own_seed, color_tol) >= RESEED_UNIFORM_FRAC:
+            seed = own_seed
+            count += 1
+            continue
+        break
     return count
 
 
 def detect_content_crop(frame_bgr,
-                        std_thresh=DEFAULT_STD_THRESH,
                         color_tol=DEFAULT_COLOR_TOL,
+                        min_frac=DEFAULT_MIN_MATTE_FRAC,
                         max_crop_frac=DEFAULT_MAX_CROP_FRAC):
     """
     Find the active-picture rectangle inside a matted frame.
@@ -74,11 +104,11 @@ def detect_content_crop(frame_bgr,
     max_rows = int(h * max_crop_frac)
     max_cols = int(w * max_crop_frac)
 
-    top = _scan_edge(frame_bgr, std_thresh, color_tol, max_rows)
-    bottom = _scan_edge(frame_bgr[::-1], std_thresh, color_tol, max_rows)
+    top = _scan_edge(frame_bgr, color_tol, min_frac, max_rows)
+    bottom = _scan_edge(frame_bgr[::-1], color_tol, min_frac, max_rows)
     cols = frame_bgr.transpose(1, 0, 2)  # index by column
-    left = _scan_edge(cols, std_thresh, color_tol, max_cols)
-    right = _scan_edge(cols[::-1], std_thresh, color_tol, max_cols)
+    left = _scan_edge(cols, color_tol, min_frac, max_cols)
+    right = _scan_edge(cols[::-1], color_tol, min_frac, max_cols)
 
     x0, y0 = left, top
     x1, y1 = w - right, h - bottom
