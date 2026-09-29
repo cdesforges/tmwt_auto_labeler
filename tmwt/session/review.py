@@ -29,7 +29,10 @@ from tmwt.ui.labeler_ui import APPROVED_MARK, DONE, FAILED, REJECTED_MARK, WORKI
 from tmwt.ui.player import Player
 from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, KEY_SPACE, ORANGE, RED, WHITE
 
+# review_job results: finish the review now (go to "Review complete"), or stop
+# and come back later (progress is saved, no outputs are written).
 QUIT = "quit"
+SAVE_AND_QUIT = "save_quit"
 # Outcomes of setting endpoints (_set_endpoints).
 _REPLAY = "replay"        # complete timing found: play the video with it
 _PROMPT = "prompt"        # back to the review prompt without replaying
@@ -44,7 +47,8 @@ def review_job(job, ui, i, start_at_menu=False):
     replaying it first.
 
     Returns:
-        QUIT if the user asked to stop reviewing, else None.
+        QUIT (finish the review now), SAVE_AND_QUIT (stop, to continue later),
+        or None once this video is decided.
     """
     print(f"\n  Reviewing {job.name}")
     ui.active = i
@@ -108,6 +112,8 @@ def review_job(job, ui, i, start_at_menu=False):
             return None
         elif choice == "quit":
             return QUIT
+        elif choice == "save_quit":
+            return SAVE_AND_QUIT
         # "replay" loops round and plays again.
 
 

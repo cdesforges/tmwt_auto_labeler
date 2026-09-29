@@ -67,7 +67,8 @@ REVIEW_OPTIONS = [
     ("3", "Walk start/stop inaccurate (time it manually)", "timing", (ord("3"),)),
     ("4", "Skip this file", "skip", (ord("4"),)),
     ("R", "Replay", "replay", (ord("r"), ord("R"))),
-    ("Esc", "Quit review (save the rest unreviewed)", "quit", (KEY_ESC,)),
+    ("F", "Finish review (save results)", "quit", (ord("f"), ord("F"))),
+    ("Esc", "Save progress and quit (continue later)", "save_quit", (KEY_ESC,)),
 ]
 # Offered on the review prompt only when more than one person was tracked.
 WRONG_PERSON_OPTION = ("5", "Wrong person tracked (pick the walker)", "person", (ord("5"),))

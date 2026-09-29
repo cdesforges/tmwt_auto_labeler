@@ -212,18 +212,19 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
    | Wrong person tracked (`5`) | Only shown when several people were tracked. Click the person doing the walk test on a frame showing everyone; timing is recomputed for them and the video replays. |
    | Skip this file (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
    | Replay (`R`) | Play the video again. |
-   | Quit review (Esc) | Review stops; the remaining videos keep their automatic results, marked unreviewed. |
+   | Finish review (`F`) | Go to the **Review complete** screen now; videos not reviewed yet keep their automatic results, marked unreviewed. |
+   | Save progress and quit (Esc) | Stop and come back later: your decisions so far are saved, no outputs are written, and the next review of the folder offers to continue. |
 
-3. **Save.** Once review is finished (or you quit it), a **Review complete**
-   screen shows what will be saved. **Save results** writes the outputs of every
-   video that wasn't skipped, in one go, with a progress bar; **Exit without
-   saving** writes nothing and keeps your review progress for next time (the
-   analysis files stay too, so there's no re-processing). Click a video in the sidebar to change it first; you
+3. **Save.** Once every video is reviewed (or you choose **Finish review**), a
+   **Review complete** screen shows what will be saved. **Save results** writes
+   the outputs of every video that wasn't skipped, in one go, with a progress
+   bar; **Save progress and quit** writes nothing yet and keeps your review
+   progress for next time. Click a video in the sidebar to change it first; you
    come back to this screen afterwards. Nothing is written during review, so
    there's no wait between videos.
    **Stopping part-way.** Review progress is saved as you go (after every
    decision and whenever you switch video) to `tmwt_analysis/review_progress.json`.
-   If you close the window or exit without saving, the next review of the
+   If you choose **Save progress and quit** or close the window, the next review of the
    folder asks whether to **Continue** where you left off (reopening the video
    you were on) or **Start over**. The file is deleted once the outputs are
    saved. Progress for a video that has since been replaced or re-processed is
