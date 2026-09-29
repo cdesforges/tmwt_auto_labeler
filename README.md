@@ -210,7 +210,8 @@ review) a **save** button (floppy disk); the folder's name in the middle
    end are marked in green and red), the mark buttons (a **green dot** marks the
    walk start and a **red dot** the stop, at the frame on screen; `M` presses
    them in turn), frame-back / play-pause / frame-forward buttons (←, Space, →;
-   hold an arrow key to keep stepping), **Confirm** (Enter) and the menu button
+   hold an arrow key to keep stepping), **Confirm** (Enter; hover to see
+   shortcuts) and the menu button
    **☰** (Esc). Hover over an icon button to see what it does. The video
    doesn't end the playback: it pauses on the last frame.
    **Correcting the timing while you watch:** pause, then mark the start or
@@ -284,15 +285,16 @@ For each video, the labeler establishes two rope endpoints:
 
 Without a single ArUco marker, the video is marked orange during analysis. When
 its review comes up, the start point is already placed where the subject was
-standing and you click only the **finish** point, then **Confirm (Enter)**.
+standing and you click only the **finish** point, then **Confirm**.
 
 On the endpoint screen (also **☰ > Change rope endpoints**):
+- While a point is missing, **click** to place it (the start first, then the
+  finish).
 - **Drag** the START or FINISH point to move it (it's ringed when the pointer
   is on it); the line follows as you drag.
-- **Move start point** / **Move endpoint**: the next click places that point
-  (**Keep start point** / **Keep endpoint** leaves it where it was).
 - **Auto start point** (shown once the start has been moved): puts the start
   back where the subject was detected standing.
+- **Confirm** (hover to see its shortcut, Enter) or **Cancel** (Esc).
 - A start at the detected standing spot is timed from the subject's first
   foot movement; a start you place anywhere else is treated as a start line
   (timing starts when the subject crosses it, or at their first movement if

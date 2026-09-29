@@ -44,38 +44,31 @@ class EndpointPickingTest(unittest.TestCase):
     def test_pre_placed_start_asks_for_the_finish(self):
         st = EndpointPicking(start=(5, 5), auto_start=(5, 5))
         self.assertEqual(st.placing, "finish")
-        self.assertEqual(values(st), ["move_start", "cancel"])       # no Auto: it's already automatic
+        self.assertEqual(values(st), ["cancel"])                   # no Auto: it's already automatic
         self.assertFalse(st.start_moved)
 
     def test_both_placed_offers_confirm_with_enter(self):
         st = EndpointPicking((5, 5), (9, 9), auto_start=(5, 5))
         self.assertIsNone(st.placing)
         confirm = [s for s in st.specs() if s[1] == "confirm"][0]
-        self.assertEqual(confirm[0], "Confirm (Enter)")
-        self.assertEqual(confirm[2], KEY_ENTER)
-        self.assertEqual(values(st), ["move_start", "move_finish", "confirm", "cancel"])
+        self.assertEqual(confirm.text, "Confirm")                  # the shortcut is shown on hover
+        self.assertEqual(confirm.keys, KEY_ENTER)
+        self.assertIn("Enter", confirm.tooltip)
+        self.assertEqual(values(st), ["confirm", "cancel"])        # no move buttons: points are dragged
+
+    def test_no_confirm_until_both_are_placed(self):
+        self.assertNotIn("confirm", values(EndpointPicking()))
+        self.assertNotIn("confirm", values(EndpointPicking(start=(5, 5))))
 
     def test_clicks_do_nothing_once_both_are_placed(self):
         st = EndpointPicking((5, 5), (9, 9))
         st.place((100, 100))
         self.assertEqual((st.start, st.finish), ((5, 5), (9, 9)))
 
-    def test_move_and_keep(self):
+    def test_dragging_moves_a_placed_point(self):
         st = EndpointPicking((5, 5), (9, 9))
-        st.press("move_start")
-        self.assertEqual(st.placing, "start")
-        self.assertIn("keep", values(st))
-        st.press("keep")
-        self.assertEqual((st.placing, st.start), (None, (5, 5)))
-        st.press("move_finish")
-        self.assertEqual(st.placing, "finish")
-        st.place((50, 60))
+        st.drag("finish", (50, 60), done=True)
         self.assertEqual((st.finish, st.placing), ((50, 60), None))
-
-    def test_move_param_starts_by_moving_that_point(self):
-        self.assertEqual(EndpointPicking((5, 5), (9, 9), move="finish").placing, "finish")
-        # ...but a missing point still comes first
-        self.assertEqual(EndpointPicking(None, (9, 9), move="finish").placing, "start")
 
     def test_auto_start_point(self):
         st = EndpointPicking((5, 5), (9, 9), auto_start=(5, 5))
@@ -103,13 +96,10 @@ class EndpointPickingTest(unittest.TestCase):
         st.drag("start", (5, 5), done=True)
         self.assertFalse(st.start_moved)
 
-    def test_dropping_the_point_being_placed_places_it(self):
+    def test_live_drag_updates_the_point_before_the_drop(self):
         st = EndpointPicking((5, 5), (9, 9))
-        st.press("move_finish")
         st.drag("finish", (70, 80), done=False)
-        self.assertEqual(st.placing, "finish")                    # still dragging
-        st.drag("finish", (70, 80), done=True)
-        self.assertEqual((st.finish, st.placing), ((70, 80), None))
+        self.assertEqual(st.finish, (70, 80))
 
     def test_dragging_the_other_point_keeps_placing(self):
         st = EndpointPicking((5, 5), None)

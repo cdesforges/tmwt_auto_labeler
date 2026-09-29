@@ -373,3 +373,20 @@ class RowFittingTest(unittest.TestCase):
         self.assertLessEqual(buttons[-1].x + buttons[-1].w, MAIN_W)
         self.assertTrue(all(b.text.endswith("...") for b in buttons))
         self.assertEqual([b.value for b in buttons], ["0", "1", "2", "3", "4"])   # values untouched
+
+
+class TooltipSpecTest(unittest.TestCase):
+    """ButtonSpec tooltips: shown on hover (base_window draws them)."""
+
+    def test_text_button_tooltip_from_the_spec(self):
+        (b,) = button_row([widgets.CONFIRM], 100)
+        self.assertEqual((b.text, b.tooltip), ("Confirm", "Shortcut: Enter"))
+
+    def test_plain_tuples_still_work(self):
+        text, icon = button_row([("OK", "ok", ()), ("Play", "play", (), "play")], 100)
+        self.assertIsNone(text.tooltip)
+        self.assertEqual(icon.tooltip, "Play")          # an icon button's label is its tooltip
+
+    def test_icon_button_with_its_own_tooltip(self):
+        (b,) = button_row([widgets.ButtonSpec("Play", "play", (), "play", "Play (Space)")], 100)
+        self.assertEqual(b.tooltip, "Play (Space)")

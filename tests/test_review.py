@@ -68,7 +68,7 @@ class FakeUI:
         self.menus.append((options, note))
         return self.menu.pop(0)
 
-    def pick_endpoints(self, frame, reason=None, start=None, finish=None, move=None, auto_start=None):
+    def pick_endpoints(self, frame, reason=None, start=None, finish=None, auto_start=None):
         return self.endpoints.pop(0)
 
 

@@ -493,3 +493,32 @@ class DialogTest(WindowTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ButtonTooltipTest(WindowTestCase):
+    """Hovering a button that has a tooltip draws it above the button."""
+
+    def drawn_near(self, button):
+        """Whether something light was drawn just above `button` (where the tooltip goes)."""
+        canvas = self.win.shown[-1]
+        y0 = button.y + TOPBAR_H - 30
+        region = canvas[y0:button.y + TOPBAR_H - 2, button.x:button.x + 120]
+        return (region > 200).any()
+
+    def show(self, buttons, mouse):
+        self.win.mouse_pos = mouse
+        self.win.script.append({})
+        main = np.zeros((MAIN_H, MAIN_W, 3), np.uint8)
+        self.ui._interact(main, buttons, 1)
+
+    def test_confirm_shows_its_shortcut_on_hover(self):
+        (confirm,) = button_row([widgets.CONFIRM], 300)
+        self.show([confirm], None)
+        self.assertFalse(self.drawn_near(confirm))
+        self.show([confirm], centre(confirm))
+        self.assertTrue(self.drawn_near(confirm))
+
+    def test_button_without_a_tooltip_shows_none(self):
+        (ok,) = button_row([("OK", "ok", ())], 300)
+        self.show([ok], centre(ok))
+        self.assertFalse(self.drawn_near(ok))

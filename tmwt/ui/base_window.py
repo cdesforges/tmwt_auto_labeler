@@ -37,7 +37,7 @@ from tmwt.ui.panel import Panel
 from tmwt.ui.seek_bar import MARK, SeekBar
 from tmwt.ui.sidebar import DEFAULT_LEGEND, SIDEBAR_W, Sidebar
 from tmwt.ui.top_bar import TOPBAR_H, TopBar
-from tmwt.ui.widgets import (GREY, KEY_ENTER, KEY_ESC, MAIN_H, MAIN_W, ORANGE, WHITE, IconButton,
+from tmwt.ui.widgets import (GREY, KEY_ENTER, KEY_ESC, MAIN_H, MAIN_W, ORANGE, WHITE,
                              button_row, dimmed, draw_buttons, draw_tooltip, put_centered)
 from tmwt.ui.window import Window
 
@@ -338,9 +338,9 @@ class BaseWindow:
         img = main.copy()
         mouse = self._mouse(self.main)
         draw_buttons(img, buttons, mouse, self._armed)
-        hovered = next((b for b in buttons if isinstance(b, IconButton) and b.contains(mouse)), None)
+        hovered = next((b for b in buttons if b.tooltip and b.contains(mouse)), None)
         if hovered is not None and self._armed is None and self._drag is None:
-            draw_tooltip(img, hovered.text, (hovered.x, hovered.y), above=True)
+            draw_tooltip(img, hovered.tooltip, (hovered.x, hovered.y), above=True)
         return self._handle_input(buttons, self._show(img, wait_ms), hotkeys, seek_markers, handles)
 
     def _wait_for_choice(self, main, buttons):

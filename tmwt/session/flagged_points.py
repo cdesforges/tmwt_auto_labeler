@@ -15,7 +15,7 @@ from tmwt.measurement import timing
 from tmwt.session.review_playback import pose_highlights
 from tmwt.ui import annotate
 from tmwt.ui.player import Player
-from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, ORANGE, RED
+from tmwt.ui.widgets import CONFIRM, GREEN, GREY, KEY_ENTER, ORANGE, RED
 
 # Flagged-points mode: jump between flagged frames ([ and ]).
 _PREV_FLAG = ("Previous flagged frame ([)", "prev_flag", (ord("["),), "prev_flag")
@@ -77,7 +77,7 @@ def review_flagged_points(job, ui):
             toggle = (("Unsmooth", "unsmooth", ()) if job.pose_edits
                       else ("Smooth points", "smooth", ()))
             specs = ([_PREV_FLAG] + player.transport() + [_NEXT_FLAG, toggle]
-                     + [("Confirm (Enter)", "confirm", KEY_ENTER)])
+                     + [CONFIRM])
             value, _ = player.show(ui, image, specs, label,
                                    marks=[(job.walk_start, GREEN), (job.walk_end, RED)], alert=alert)
             alert = None

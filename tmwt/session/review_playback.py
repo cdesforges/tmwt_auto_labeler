@@ -5,7 +5,7 @@ drawn on, until the reviewer chooses Confirm or the menu.
 Below the picture: a seek bar with the walk's start and stop marks (drag their
 tabs to move them), the mark buttons (green dot: walk start, red dot: walk
 stop; M presses them in turn), frame-step and play buttons (player.py),
-Confirm (Enter) and the menu button (☰, Esc). Flagged pose points are orange
+Confirm (Enter; shown on hover) and the menu button (☰, Esc). Flagged pose points are orange
 and smoothed ones yellow, on the skeleton and along the timeline.
 """
 
@@ -15,7 +15,7 @@ from tmwt.core import video_io
 from tmwt.pose.pose_common import FLAGGED_COLOR, SMOOTHED_COLOR
 from tmwt.ui import annotate
 from tmwt.ui.player import Player
-from tmwt.ui.widgets import GREEN, KEY_ENTER, KEY_ESC, RED
+from tmwt.ui.widgets import CONFIRM, GREEN, KEY_ESC, RED
 
 # Marks: M marks the start, then the stop, then the start again, and so on (the
 # tooltip and badge say which is next). Space always plays / pauses.
@@ -27,7 +27,6 @@ _STOP_BEFORE_START = "Stop is before start: mark or drag them again"
 _MARKS = {"start": "mark_start", "stop": "mark_stop"}
 
 # The playback's own buttons, right of the transport controls.
-_CONFIRM = ("Confirm (Enter)", "confirm", KEY_ENTER)
 
 _MENU = ("Menu (Esc)", "menu", (KEY_ESC,), "menu")
 
@@ -84,7 +83,7 @@ def playback(job, ui, start_k=None, notice=None):
                                             None if backwards else end,
                                             model_strength=job.model_strength)
             specs = ([_mark_button(which, m_next) for which in _MARKS] + player.transport()
-                     + [_CONFIRM, _MENU])
+                     + [CONFIRM, _MENU])
             label = None
             if marks != original:
                 label = f"EDITED  start {_mark_text(start)}  stop {_mark_text(end)}  (M: {m_next})"

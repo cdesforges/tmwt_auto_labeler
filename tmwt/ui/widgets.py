@@ -5,9 +5,10 @@ and tooltips. (The seek bar is in seek_bar.py.)
 
 Everything is drawn with OpenCV into the fixed-size main-area canvas
 (MAIN_W x MAIN_H); window.py scales it to the real window. Buttons are described
-by specs, (text, value, keys) or (text, value, keys, icon): the label, the value
-returned when chosen, the key codes that also choose it, and an optional icon
-(see ICONS) drawn instead of the text.
+by specs (ButtonSpec, or a plain tuple in the same order): the label, the value
+returned when chosen, the key codes that also choose it, an optional icon (see
+ICONS) drawn instead of the label, and an optional tooltip shown on hover (an
+icon button's label is its tooltip).
 
 Buttons share one base class (Button: hit-testing and the normal / hover /
 pressed look) and differ only in what they draw on top: TextButton (centred
@@ -16,6 +17,7 @@ icon; its text is shown as a tooltip).
 """
 
 import unicodedata
+from collections import namedtuple
 
 import cv2
 import numpy as np
@@ -151,6 +153,14 @@ def frame_screen(img, top=0, bottom=BAR_H):
 
 # --- Buttons -------------------------------------------------------------------
 
+# What a button_row button is: its label, the value returned when it's chosen,
+# key codes that also choose it, and optionally an icon (ICONS) drawn instead
+# of the label and a tooltip shown on hover. Plain tuples in this order work too.
+ButtonSpec = namedtuple("ButtonSpec", "text value keys icon tooltip", defaults=(None, None))
+
+# The Confirm button used across screens; its shortcut is shown on hover.
+CONFIRM = ButtonSpec("Confirm", "confirm", KEY_ENTER, tooltip="Shortcut: Enter")
+
 class Button:
     """
     Base class for clickable buttons drawn with OpenCV, behaving like a standard
@@ -171,11 +181,12 @@ class Button:
     # Inset shadow lines along the top and left edges when pressed, outermost first.
     _SHADOW = ((0, 0, 0), (6, 6, 6), (12, 12, 12), (18, 18, 18), (24, 24, 24), (30, 30, 30))
 
-    def __init__(self, rect, text, value, keys=()):
+    def __init__(self, rect, text, value, keys=(), tooltip=None):
         self.x, self.y, self.w, self.h = rect
         self.text = text
         self.value = value          # returned when chosen
         self.keys = keys            # key codes that also choose it
+        self.tooltip = tooltip      # shown on hover (see draw_tooltip), or None
 
     def contains(self, pt):
         return (pt is not None and self.x <= pt[0] < self.x + self.w
@@ -226,10 +237,10 @@ class KeyedButton(Button):
 
 
 class IconButton(Button):
-    """A button showing one of ICONS; its text is the tooltip (see draw_tooltip)."""
+    """A button showing one of ICONS; its text is the tooltip unless another is given."""
 
-    def __init__(self, rect, text, value, keys=(), icon="play", icon_size=11):
-        super().__init__(rect, text, value, keys)
+    def __init__(self, rect, text, value, keys=(), icon="play", icon_size=11, tooltip=None):
+        super().__init__(rect, text, value, keys, tooltip or text)
         self.icon = icon
         self.icon_size = icon_size
 
@@ -299,13 +310,13 @@ def button_row(specs, y):
     """
     buttons = []
     for spec in specs:
-        text, value, keys = spec[:3]
-        icon = spec[3] if len(spec) > 3 else None
+        text, value, keys, icon, tooltip = ButtonSpec(*spec)
         if icon:
-            buttons.append(IconButton((0, y, _ICON_BTN_W, BTN_H), text, value, keys, icon=icon))
+            buttons.append(IconButton((0, y, _ICON_BTN_W, BTN_H), text, value, keys, icon=icon,
+                                      tooltip=tooltip))
         else:
             w = max(_BTN_MIN_W, _text_w(text) + 48)
-            buttons.append(TextButton((0, y, w, BTN_H), text, value, keys))
+            buttons.append(TextButton((0, y, w, BTN_H), text, value, keys, tooltip))
     gap = _BTN_GAP
     room = MAIN_W - 2 * _ROW_MARGIN
     text_buttons = [b for b in buttons if isinstance(b, TextButton)]

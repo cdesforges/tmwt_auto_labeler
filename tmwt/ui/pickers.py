@@ -9,7 +9,7 @@ import cv2
 
 from tmwt.pose import pose_common
 from tmwt.ui.base_window import HANDLE_RADIUS
-from tmwt.ui.widgets import (BLUE, FONT, HEADER_H, KEY_BACKSPACE, KEY_ENTER, KEY_ESC, ORANGE, RED,
+from tmwt.ui.widgets import (BLUE, CONFIRM, FONT, HEADER_H, KEY_ESC, ORANGE, RED,
                              WHITE, YELLOW, bar_buttons, frame_screen)
 
 # Colours for telling people apart on the "pick the walker" screen.
@@ -23,15 +23,11 @@ class EndpointPicking:
     click places next (`placing`: "start", "finish" or None when both are
     set), and the buttons to offer.
 
-      - A click places the point being placed, then moves on to the next one
-        missing.
-      - Dragging a point moves it (dropping the point being placed counts as
-        placing it).
-      - Move start point / Move endpoint: a click places that point again;
-        Keep start point / Keep endpoint leaves it as it was.
+      - While a point is missing, a click places it (the start first).
+      - Dragging a placed point moves it.
       - Auto start point (when the start isn't the detected standing spot):
         puts it back there.
-      - Confirm (Enter) once both are set; Cancel (Esc) any time.
+      - Confirm (Enter, shown on hover) once both are set; Cancel (Esc) any time.
     """
 
     PROMPTS = {
@@ -40,10 +36,10 @@ class EndpointPicking:
         None: "Check the line, then Confirm. Drag a point to move it.",
     }
 
-    def __init__(self, start=None, finish=None, auto_start=None, move=None):
+    def __init__(self, start=None, finish=None, auto_start=None):
         self.start, self.finish, self.auto_start = start, finish, auto_start
         self.start_moved = start is not None and start != auto_start
-        self.placing = self._missing() or move
+        self.placing = self._missing()
 
     def _missing(self):
         """The first point not placed yet, or None."""
@@ -54,28 +50,14 @@ class EndpointPicking:
 
     def specs(self):
         """Button specs for the bar, for the current state."""
-        cancel = ("Cancel", "cancel", (KEY_ESC,))
-        move_start = ("Move start point", "move_start", ())
         auto = ([("Auto start point", "auto_start", ())]
                 if self.auto_start is not None and self.start != self.auto_start else [])
-        if self.placing == "start":
-            keep = [("Keep start point", "keep", ())] if self.start is not None else []
-            return keep + auto + [cancel]
-        if self.placing == "finish":
-            keep = [("Keep endpoint", "keep", ())] if self.finish is not None else []
-            return [move_start] + auto + keep + [cancel]
-        return [move_start, ("Move endpoint", "move_finish", KEY_BACKSPACE)] + auto + [
-            ("Confirm (Enter)", "confirm", KEY_ENTER), cancel]
+        confirm = [CONFIRM] if self.placing is None else []
+        return auto + confirm + [("Cancel", "cancel", (KEY_ESC,))]
 
     def press(self, value):
         """Apply a button (other than Confirm / Cancel)."""
-        if value == "move_start":
-            self.placing = "start"
-        elif value == "move_finish":
-            self.placing = "finish"
-        elif value == "keep":
-            self.placing = self._missing()
-        elif value == "auto_start" and self.auto_start is not None:
+        if value == "auto_start" and self.auto_start is not None:
             self.start, self.start_moved = self.auto_start, False
             self.placing = self._missing()
 
@@ -109,7 +91,7 @@ class PickerScreens:
     window's _interact and _new_screen.
     """
 
-    def pick_endpoints(self, frame, reason=None, start=None, finish=None, move=None, auto_start=None):
+    def pick_endpoints(self, frame, reason=None, start=None, finish=None, auto_start=None):
         """
         Let the user set the rope endpoints on `frame`: the START point (far
         endpoint, where the walk begins) and the FINISH point (near endpoint).
@@ -121,7 +103,6 @@ class PickerScreens:
             reason: optional line explaining why clicks are needed.
             start, finish: points to pre-place (e.g. where the subject was
                 detected standing), or None.
-            move: "start" or "finish" to begin by moving that point.
             auto_start: the detected standing spot, for "Auto start point".
 
         Returns:
@@ -140,7 +121,7 @@ class PickerScreens:
             return (int(round(min(max((pt[0] - ox) / scale, 0), fw - 1))),
                     int(round(min(max((pt[1] - oy) / scale, 0), fh - 1))))
 
-        state = EndpointPicking(start, finish, auto_start, move)
+        state = EndpointPicking(start, finish, auto_start)
         self._new_screen()
         while True:
             handles = {k: to_screen(p) for k, p in (("start", state.start), ("finish", state.finish))
