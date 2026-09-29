@@ -6,6 +6,7 @@ import numpy as np
 
 from tmwt.ui.player import seek_state
 from tmwt.ui.seek_bar import MARK, SCRUB, Marker, SeekBar, SeekState
+from tmwt.pose.pose_common import FLAGGED_COLOR as ORANGE, SMOOTHED_COLOR as YELLOW
 from tmwt.ui.widgets import GREEN, MAIN_H, MAIN_W, RED
 
 
@@ -83,18 +84,19 @@ class SeekStateTest(unittest.TestCase):
         self.assertIsNone(seek_state(self.TIMES, 26, marks).playhead_fill)
 
     def test_flagged_frames_become_stretches(self):
-        state = seek_state(self.TIMES, 0, [], flagged=[10, 11, 12, 50])
-        self.assertEqual(len(state.flagged), 2)                    # 10-12 merge, 50 alone
-        a, b = state.flagged[0]
+        state = seek_state(self.TIMES, 0, [], {ORANGE: [10, 11, 12, 50], YELLOW: [20]})
+        orange = [s for s in state.stretches if s[2] == ORANGE]
+        self.assertEqual(len(orange), 2)                           # 10-12 merge, 50 alone
+        self.assertEqual(len([s for s in state.stretches if s[2] == YELLOW]), 1)
+        a, b, _ = orange[0]
         self.assertAlmostEqual(a, self.TIMES[10] / self.TIMES[-1])
         self.assertAlmostEqual(b, self.TIMES[13] / self.TIMES[-1])
 
     def test_flagged_stretch_is_drawn_orange(self):
-        from tmwt.ui.seek_bar import FLAGGED_COLOR
         bar = SeekBar()
         img = np.zeros((MAIN_H, MAIN_W, 3), np.uint8)
-        bar.draw(img, SeekState(0.0, [], "", None, [(0.5, 0.5)]))    # one frame, zero width
-        self.assertEqual(tuple(img[bar.Y, bar.x_at(0.5)]), FLAGGED_COLOR)
+        bar.draw(img, SeekState(0.0, [], "", None, [(0.5, 0.5, ORANGE)]))    # one frame, zero width
+        self.assertEqual(tuple(img[bar.Y, bar.x_at(0.5)]), ORANGE)
 
     def test_unset_marks_are_ignored(self):
         state = seek_state(self.TIMES, 0, [(None, GREEN, "start")])

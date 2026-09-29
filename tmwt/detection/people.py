@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from tmwt.pose import pose_common
-from tmwt.detection import pose_check, tracking
+from tmwt.detection import pose_check, pose_smoothing, tracking
 
 # Most people detected per frame.
 MAX_PEOPLE = 5
@@ -188,6 +188,8 @@ def set_subject(job, track):
     reference-frame positions from that person (None where they weren't seen),
     and check that person's pose for implausible points (pose_check.py).
     """
+    if job.pose_edits:
+        pose_smoothing.undo_all(job)   # smoothing belongs to the previous subject's pose
     job.subject = track.id if track is not None else None
     shape = job.info.first_frame.shape
     for f in job.frames:
@@ -200,6 +202,7 @@ def set_subject(job, track):
     flags = pose_check.by_frame(job.pose_flags)
     for k, f in enumerate(job.frames):
         f.pose_flags = flags.get(k, {})
+        f.pose_smoothed = set()
 
 
 def subject_start(job):

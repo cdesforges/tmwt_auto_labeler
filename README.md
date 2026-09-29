@@ -330,14 +330,27 @@ questions are asked, so it runs unattended (e.g. under SLURM).
   in the info panel, which also lists the model strength for every video;
 - leaves flagged points out of the timing (a stray toe can't trigger a line
   crossing);
-- asks, when approved, whether the detection is fine: **Detection is fine:
-  keep it**, or **Remove this video from the analysis** (it's then rejected,
-  reason "pose detection anomalies").
+- asks, when approved, whether the detection is fine: **It's fine: keep it**,
+  **Smooth flagged points**, **Remove from analysis** (the video is then
+  rejected, reason "pose detection anomalies"), or **Go back**.
 
-Pose data is never altered: flagged points stay in the CSV's landmark columns,
-and the CSV's `pose_flags` column says which ones they are in each frame (e.g.
-`left_small_toe:foot_length`), so the gait analysis can decide what to do with
-them.
+**Smoothing** replaces each flagged point by linear interpolation from the
+nearest frames (within 0.5 s) where that point wasn't flagged. Heels and toes
+are interpolated relative to their ankle, then placed on that frame's ankle,
+so the foot moves with the step; hips, knees and ankles are interpolated in
+position. Points with no good frames near enough are left as they were (still
+orange). The video then replays with the smoothed points, and their timeline
+stretches, in **yellow**, and asks **Keep smoothing** or **Undo smoothing**.
+Kept smoothing counts in the timing (automatic timing is recomputed) and is
+saved with the review progress.
+
+Pose data is only changed by smoothing the reviewer chose, and always
+labelled: the CSV's `pose_flags` column says which points were flagged in each
+frame (e.g. `left_small_toe:foot_length`), `pose_smoothed` which of them now
+hold smoothed values, and `<basename>_pose_corrections.csv` lists every
+smoothed point with its original and new position. Unsmoothed flagged points
+stay in the landmark columns as detected, so the gait analysis can decide what
+to do with them.
 
 ## Multiple people
 
@@ -410,6 +423,7 @@ are written to `--output_dir`. Videos rejected at review get no outputs.
 | `<basename>_timing.json`    | The walk timing the labeler decided (start, end, duration, speed), how the start was found, the review outcome, the pose model used (`model_strength`) and the pose check's outcome (`pose_check`). `view.py` reads it. |
 | `<basename>_annotated.mp4`  | Source frames with skeleton, rope, and info panel overlaid.                                           |
 | `<basename>_skeleton.mp4`   | Black canvas with skeleton, rope, and info panel only — de-identified for sharing.                    |
+| `<basename>_pose_corrections.csv` | Only if flagged pose points were smoothed at review: each one's frame, landmark, flag, and original and smoothed position. |
 
 The info panel on both output videos shows the walk status and timer.
 
@@ -495,6 +509,7 @@ tmwt/
     tracking.py           #   Ground-plane optical-flow tracker (camera drift)
     people.py             #   Following everyone in view and choosing the walking subject
     pose_check.py         #   Flagging implausible leg / foot points (pose check)
+    pose_smoothing.py     #   Replacing flagged points by interpolation, at review
     endpoints.py          #   Finish line from the ArUco marker
   measurement/            # Turning positions into timing
     metric.py             #   Geometry: t_along and perspective-correct distance along the course

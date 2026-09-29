@@ -29,20 +29,22 @@ _GREEN = (0, 200, 0)
 _BRIGHT_GREEN = (0, 255, 0)
 _YELLOW = (0, 255, 255)
 _ORANGE = pose_common.FLAGGED_COLOR
+_SMOOTHED = pose_common.SMOOTHED_COLOR
 
 # Panel text shown before the walk starts.
 WAITING_AUTO = ("Waiting for person", "to start walking...")
 WAITING_MANUAL = ("Mark the start when", "the person starts walking")
 
 
-def draw_scene(img, pose, body_px, far_ep, near_ep, flags=()):
+def draw_scene(img, pose, body_px, far_ep, near_ep, flags=(), smoothed=()):
     """
     Draw the skeleton, body point and rope on `img` (in place). Any may be
     None. Landmarks in `flags` (implausible points, see pose_check.py) are
-    drawn in orange.
+    drawn in orange, and those in `smoothed` (replaced, pose_smoothing.py) in
+    yellow.
     """
     if pose is not None:
-        pose_common.draw_pose(img, pose, highlight=flags)
+        pose_common.draw_pose(img, pose, highlight=flags, smoothed=smoothed)
         if body_px is not None:
             cv2.circle(img, body_px, 5, BODY_COLOR, -1)
     if far_ep is not None and near_ep is not None:
@@ -53,7 +55,8 @@ def draw_scene(img, pose, body_px, far_ep, near_ep, flags=()):
 
 def draw_info_panel(height, time_s, frame_idx, t_along, walk_start, walk_end,
                     title="TMWT Labeler", subtitle=None,
-                    waiting_lines=WAITING_AUTO, controls="", model_strength=None, flagged=()):
+                    waiting_lines=WAITING_AUTO, controls="", model_strength=None, flagged=(),
+                    smoothed=()):
     """
     Build the info side panel for one frame.
 
@@ -125,12 +128,15 @@ def draw_info_panel(height, time_s, frame_idx, t_along, walk_start, walk_end,
     if model_strength:
         text(f"Model strength:  {model_strength}", y, 0.45, _INFO)
         y += 22
-    if flagged:
-        y += 8
-        text("Pose check (orange):", y, 0.45, _ORANGE)
-        for name in flagged:
-            y += 20
-            text(f"  {name.replace('_', ' ')}", y, 0.42, _ORANGE)
+    for names, heading, color in ((flagged, "Pose check (orange):", _ORANGE),
+                                  (smoothed, "Smoothed (yellow):", _SMOOTHED)):
+        if names:
+            y += 8
+            text(heading, y, 0.45, color)
+            for name in names:
+                y += 20
+                text(f"  {name.replace('_', ' ')}", y, 0.42, color)
+            y += 22
 
     text(controls, height - 15, 0.4, _RULE)
     return panel
@@ -156,8 +162,11 @@ def render_frame(frame_bgr, result, walk_start, walk_end,
                             result.t_along, walk_start, walk_end,
                             waiting_lines=waiting_lines, controls=controls,
                             model_strength=model_strength,
-                            flagged=[pose_check.LANDMARK_NAMES[i] for i in sorted(result.pose_flags)])
-    args = (result.pose, result.body_px, result.far_ep, result.near_ep, result.pose_flags)
+                            flagged=[pose_check.LANDMARK_NAMES[i] for i in sorted(result.pose_flags)
+                                     if i not in result.pose_smoothed],
+                            smoothed=[pose_check.LANDMARK_NAMES[i] for i in sorted(result.pose_smoothed)])
+    args = (result.pose, result.body_px, result.far_ep, result.near_ep, result.pose_flags,
+            result.pose_smoothed)
     skeleton = None
     if with_skeleton:
         canvas = np.zeros_like(frame_bgr)

@@ -20,7 +20,8 @@ import os
 from datetime import datetime
 
 from tmwt.core import analysis_file
-from tmwt.detection import people
+from tmwt.detection import people, pose_smoothing
+from tmwt.pose import pose_common
 from tmwt.measurement import timing
 from tmwt.core.job import REVIEW_UNREVIEWED, STATUS_FAILED
 
@@ -60,6 +61,10 @@ def save(jobs, last_index):
             "timing_detail": job.timing_detail,
             "timing_note": job.timing_note,
             "pose_confirmed": job.pose_confirmed,
+            # Smoothed points: [frame, landmark, x, y, z] (the originals come
+            # back from the analysis file).
+            "pose_edits": [[e.frame, e.landmark, e.smoothed.x, e.smoothed.y, e.smoothed.z]
+                           for e in job.pose_edits],
         }
     data = {"format_version": FORMAT_VERSION,
             "saved": datetime.now().isoformat(timespec="minutes"),
@@ -107,6 +112,19 @@ def counts(progress):
             reviews.count(REVIEW_UNREVIEWED))
 
 
+def _restore_pose_edits(job, saved):
+    """Re-apply smoothed points saved with the progress to the freshly loaded poses."""
+    for k, idx, x, y, z in saved:
+        f = job.frames[k] if 0 <= k < len(job.frames) else None
+        if f is None or f.pose is None or f.pose[idx] is None:
+            continue
+        original = f.pose[idx]
+        new = pose_common.Landmark(x, y, z, getattr(original, "visibility", 1.0))
+        edit = pose_smoothing.Edit(k, idx, f.pose_flags.get(idx, ""), original, new)
+        pose_smoothing.apply(job, edit)
+        job.pose_edits.append(edit)
+
+
 def restore(jobs, progress):
     """
     Apply saved progress to freshly loaded jobs. Returns the index of the video
@@ -135,6 +153,7 @@ def restore(jobs, progress):
         job.timing_source, job.timing_detail = entry["timing_source"], entry["timing_detail"]
         job.timing_note = entry.get("timing_note", "")
         job.pose_confirmed = entry.get("pose_confirmed", False)
+        _restore_pose_edits(job, entry.get("pose_edits") or [])
         job.review, job.review_note = entry["review"], entry["review_note"]
     return last
 

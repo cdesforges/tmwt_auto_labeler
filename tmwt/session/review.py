@@ -15,8 +15,9 @@ A video in which nobody was detected at all only offers "Skip this file".
 If the pose check (pose_check.py) flagged points the heavier model couldn't
 fix, the review starts with an alert, the flagged points are drawn in orange
 during playback (and left out of the timing), and approving the video asks the
-reviewer to confirm the detection is fine, or remove the video from the
-analysis.
+reviewer to confirm the detection is fine, have the flagged points smoothed
+(pose_smoothing.py: they're replayed in yellow, then kept or undone), or
+remove the video from the analysis.
 
 Every playback has a seek bar, frame-step buttons and the mark buttons (green
 dot: walk start, red dot: walk stop), and the marks can be dragged along the
@@ -31,13 +32,14 @@ them, time the video manually, or skip it.
 import cv2
 
 from tmwt.ui import annotate
-from tmwt.detection import people, pose_check
+from tmwt.detection import people, pose_check, pose_smoothing
 from tmwt.measurement import timing
 from tmwt.core import video_io
 from tmwt.core.job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_NO_BODY
 from tmwt.ui.sidebar import APPROVED_MARK, DONE, FAILED, REJECTED_MARK, WORKING
 from tmwt.ui.player import Player
-from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE
+from tmwt.pose.pose_common import FLAGGED_COLOR, SMOOTHED_COLOR
+from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE, YELLOW
 
 # review_job result: finish the review now (go to "Review complete"). (Stopping
 # to continue later is the top bar's job: see labeler_ui.SaveAndQuit.)
@@ -118,6 +120,11 @@ def review_job(job, ui, i):
                 if decision == "back":
                     replay = False
                     continue
+                if decision == "smooth":
+                    note, frame = _smooth_flagged(job, ui)
+                    last_frame = frame if frame is not None else last_frame
+                    replay = False
+                    continue
                 if decision == "remove":
                     _reject(job, ui, i, "pose detection anomalies")
                     return None
@@ -163,6 +170,7 @@ def _alert_pose_flags(job, ui):
     """Tell the reviewer about flagged pose points before the first playback."""
     ui.show_message([("Pose detection anomalies", ORANGE)] + _pose_flag_lines(job) + [
         ("They're shown in orange during playback, and left out of the timing.", GREY),
+        ("When you approve the video you can keep it, smooth those points, or remove it.", GREY),
     ], [("Play video", "play", KEY_ENTER)], background=job.info.first_frame)
 
 
@@ -171,14 +179,60 @@ def _confirm_pose(job, ui, background):
     Before approving a video with flagged pose points: is the detection fine?
 
     Returns:
-        "keep" (the detection is fine), "remove" (take the video out of the
-        analysis), or "back" (to the review prompt).
+        "keep" (the detection is fine), "smooth" (replace the flagged points
+        by interpolation; offered unless some are smoothed already), "remove"
+        (take the video out of the analysis), or "back" (to the review prompt).
     """
+    smooth = [] if job.pose_edits else [("Smooth flagged points", "smooth", ())]
     return ui.show_message([("Is the pose detection fine?", ORANGE)] + _pose_flag_lines(job) + [
-        ("Keep the video if the orange points don't affect the walk; otherwise remove it.", GREY),
-    ], [("Detection is fine: keep it", "keep", KEY_ENTER),
-        ("Remove this video from the analysis", "remove", ()),
+        ("Keep the video if the orange points don't affect the walk, smooth them, or remove it.", GREY),
+    ], [("It's fine: keep it", "keep", KEY_ENTER)] + smooth + [
+        ("Remove from analysis", "remove", ()),
         ("Go back", "back", (KEY_ESC,))], background=background)
+
+
+def _smooth_flagged(job, ui):
+    """
+    Replace the flagged points by interpolation (pose_smoothing.py), replay the
+    video with them in yellow, and ask whether to keep them. Automatic timing
+    is recomputed, since the smoothed points now count.
+
+    Returns:
+        (note for the review prompt, last frame shown or None).
+    """
+    edits, failed = pose_smoothing.smooth_flagged(job)
+    if not edits:
+        return (f"None of the flagged points could be smoothed (no unflagged frames within "
+                f"{pose_smoothing.MAX_GAP_S:g} s).", None)
+    if job.timing_source == "auto":
+        timing.update_timing(job)
+    frames = len({e.frame for e in edits})
+    print(f"  Smoothed {len(edits)} flagged point(s) in {frames} frame(s); {failed} couldn't be.")
+    start, end, last = playback(job, ui)
+    lines = [
+        ("Keep the smoothed points?", YELLOW),
+        (f"{len(edits)} flagged point(s) in {frames} frame(s) were replaced (shown in yellow):", GREY),
+        ("each is interpolated from the nearest frames where it wasn't flagged,", GREY),
+        ("with heels and toes following their ankle. The originals are kept in", GREY),
+        ("<video>_pose_corrections.csv, and the CSV's pose_smoothed column marks them.", GREY),
+    ]
+    if failed:
+        lines.append((f"{failed} point(s) had no good frames within {pose_smoothing.MAX_GAP_S:g} s "
+                      f"and stay flagged (orange).", ORANGE))
+    choice = ui.show_message(lines, [("Keep smoothing", "keep", KEY_ENTER),
+                                     ("Undo smoothing", "undo", (KEY_ESC,))], background=last)
+    if choice == "undo":
+        pose_smoothing.undo(job, edits)
+        if job.timing_source == "auto":
+            timing.update_timing(job)
+        note = "Smoothing undone: the flagged points are back as detected."
+    else:
+        if not any(set(f.pose_flags) - f.pose_smoothed for f in job.frames):
+            job.pose_confirmed = True   # every flagged point was dealt with
+        note = f"Smoothing kept ({len(edits)} point(s)). Check the timing, then approve."
+    if (start, end) != (job.walk_start, job.walk_end) and choice != "undo":
+        note = _apply_marks(job, start, end, "marked during review") or note
+    return note, last
 
 
 def _time_manually(job, ui, background):
@@ -245,8 +299,10 @@ def playback(job, ui, manual_timing=False):
         marks = {"start": job.walk_start, "stop": job.walk_end}
         waiting = annotate.WAITING_AUTO
     original = dict(marks)
-    player = Player([f.time_s for f in job.frames],
-                    flagged=[k for k, f in enumerate(job.frames) if f.pose_flags])
+    player = Player([f.time_s for f in job.frames], highlights={
+        FLAGGED_COLOR: [k for k, f in enumerate(job.frames) if set(f.pose_flags) - f.pose_smoothed],
+        SMOOTHED_COLOR: [k for k, f in enumerate(job.frames) if f.pose_smoothed],
+    })
     source = video_io.FrameSource(job)
     m_next = "start"   # which mark M sets next
     ui.start_playback()

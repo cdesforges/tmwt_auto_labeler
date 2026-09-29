@@ -35,6 +35,7 @@ from tmwt.core import data_export
 from tmwt.measurement import timing
 from tmwt.core.job import COURSE_M
 from tmwt.detection import pose_check
+from tmwt.pose.pose_common import FLAGGED_COLOR, SMOOTHED_COLOR
 from tmwt.ui.labeler_ui import JumpTo, LabelerUI, WindowClosed
 from tmwt.ui.sidebar import DONE, FAILED, UNREVIEWED, WAITING
 from tmwt.ui.top_bar import folder_title
@@ -110,11 +111,11 @@ def content_bounds(rows, frame_w, frame_h, margin=CONTENT_MARGIN):
 def render_row(row, frame_w, frame_h, crop, walk_start, walk_end, file_name, model_strength=None):
     """One frame of the viewer: the cropped skeleton canvas plus the info panel."""
     canvas = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
-    flags = data_export.row_flags(row)
+    flags, smoothed = data_export.row_flags(row), data_export.row_smoothed(row)
     annotate.draw_scene(canvas, data_export.row_pose(row),
                         data_export.row_point(row, "body"),
                         data_export.row_point(row, "far_ep"),
-                        data_export.row_point(row, "near_ep"), flags)
+                        data_export.row_point(row, "near_ep"), flags, smoothed)
     # Drawing happens in full-canvas coordinates, so crop afterwards.
     x, y, w, h = crop
     canvas = canvas[y:y + h, x:x + w]
@@ -122,7 +123,8 @@ def render_row(row, frame_w, frame_h, crop, walk_start, walk_end, file_name, mod
         h, row.get("time_s") or 0.0, int(row.get("frame") or 0), row.get("t_along"),
         walk_start, walk_end, title="TMWT Viewer", subtitle=file_name,
         model_strength=model_strength,
-        flagged=[pose_check.LANDMARK_NAMES[i] for i in sorted(flags)])
+        flagged=[pose_check.LANDMARK_NAMES[i] for i in sorted(flags) if i not in smoothed],
+        smoothed=[pose_check.LANDMARK_NAMES[i] for i in sorted(smoothed)])
     return np.hstack([canvas, panel])
 
 
@@ -188,8 +190,11 @@ def play(ui, recording, index, count):
         return index + 1 if index + 1 < count else None
     ui.active = index
     ui.start_playback()
-    player = Player(recording.times,
-                    flagged=[k for k, row in enumerate(recording.rows) if row.get("pose_flags")])
+    player = Player(recording.times, highlights={
+        FLAGGED_COLOR: [k for k, row in enumerate(recording.rows)
+                        if set(data_export.row_flags(row)) - data_export.row_smoothed(row)],
+        SMOOTHED_COLOR: [k for k, row in enumerate(recording.rows) if row.get("pose_smoothed")],
+    })
     while True:
         transport = player.transport()
         specs = ([("Previous recording", "previous", (ord("p"), ord("P")), "prev_video")] + transport

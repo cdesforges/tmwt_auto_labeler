@@ -87,8 +87,10 @@ def pose_check_text(job):
     if not job.pose_flags:
         return "ok"
     text = f"{job.pose_flagged_frames} frame(s) flagged"
+    if job.pose_edits:
+        text += f"; {len(job.pose_edits)} point(s) smoothed at review"
     if job.pose_confirmed:
-        return text + "; confirmed fine at review"
+        return text + ("" if job.pose_edits else "; confirmed fine at review")
     if job.review == REVIEW_REJECTED:
         return text + "; video removed at review"
     return text + "; not confirmed"

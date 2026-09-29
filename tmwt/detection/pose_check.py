@@ -114,6 +114,17 @@ def describe(flags):
     return ";".join(f"{LANDMARK_NAMES[idx]}:{kind}" for idx, kind in sorted(flags.items()))
 
 
+def names(indices):
+    """Landmark indices as CSV text, e.g. "left_heel;left_small_toe"."""
+    return ";".join(LANDMARK_NAMES[i] for i in sorted(indices))
+
+
+def parse_names(text):
+    """The inverse of names: a set of landmark indices."""
+    index = {name: idx for idx, name in LANDMARK_NAMES.items()}
+    return {index[n] for n in str(text).split(";") if n in index}
+
+
 def parse(text):
     """The inverse of describe: {landmark index: kind} from CSV text."""
     index = {name: idx for idx, name in LANDMARK_NAMES.items()}

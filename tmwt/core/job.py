@@ -65,6 +65,9 @@ class FrameResult:
     # The subject's implausible points here (pose_check.py): {landmark index:
     # check name}. Drawn in orange and left out of the timing; data unchanged.
     pose_flags: dict = field(default_factory=dict)
+    # Flagged points the reviewer had replaced by interpolation
+    # (pose_smoothing.py): landmark indices. Drawn in yellow; used in timing.
+    pose_smoothed: set = field(default_factory=set)
 
     # The subject in REFERENCE-frame pixels (see tracking.to_reference_frame).
     # Set only when both the ankles and the head were found; such frames make
@@ -130,6 +133,7 @@ class VideoJob:
     # whether the reviewer looked at them and confirmed the detection is fine.
     pose_flags: list = field(default_factory=list)   # [pose_check.Flag]
     pose_confirmed: bool = False
+    pose_edits: list = field(default_factory=list)   # [pose_smoothing.Edit], in the order made
 
     @property
     def model_strength(self):

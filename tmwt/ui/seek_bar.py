@@ -10,8 +10,9 @@ The seek bar shown under playback (LabelerUI.show_frame):
     follows the pointer.
   - When the frame on screen is a mark's frame, the playhead is filled with the
     mark's colour (keeping its white outline).
-  - Stretches of the clip whose pose has flagged points (pose_check.py) are
-    orange along the track, however short (at least a few pixels wide).
+  - Stretches of the clip can be coloured along the track, however short (at
+    least a few pixels wide): orange where the pose has flagged points
+    (pose_check.py), yellow where flagged points were smoothed.
   - Marks with an id are draggable by the tab under the track. While one is
     dragged, the playhead is hidden, so the mark's new place is clear. Marks
     are grabbed by their tabs rather than their lines because right after
@@ -39,13 +40,12 @@ Marker = namedtuple("Marker", "fraction color id")
 # Everything the bar shows (LabelerUI.show_frame's `seek`): the playhead (0-1),
 # [Marker], the text at the bar's right (e.g. the time), the colour to fill
 # the playhead with (that of a mark on the frame on screen) or None, and
-# [(from, to)] stretches (0-1) to colour orange (flagged pose points).
-SeekState = namedtuple("SeekState", "fraction markers text playhead_fill flagged",
+# [(from, to, colour)] stretches (0-1) to colour along the track.
+SeekState = namedtuple("SeekState", "fraction markers text playhead_fill stretches",
                        defaults=(None, ()))
 
-# Colour of flagged stretches, and their least width in pixels.
-FLAGGED_COLOR = (0, 140, 255)   # orange, as flagged points on the skeleton
-_MIN_FLAGGED_W = 3
+# Least width of a coloured stretch, in pixels.
+_MIN_STRETCH_W = 3
 
 # Drag kinds (SeekBar.grab): scrubbing, or moving a mark.
 SCRUB = "scrub"
@@ -102,7 +102,7 @@ class SeekBar:
             drag: what's being dragged (as grab() returns), or None.
             drag_fraction: where the pointer is along the bar while dragging.
         """
-        fraction, markers, text, fill, flagged = state
+        fraction, markers, text, fill, stretches = state
         y = self.Y
         dragging_mark = drag is not None and drag[0] == MARK
         if drag is not None and drag[0] == SCRUB:
@@ -110,12 +110,12 @@ class SeekBar:
         x = self.x_at(fraction)
         cv2.line(img, (self.X0, y), (self.X1, y), (70, 70, 70), 4, cv2.LINE_AA)
         cv2.line(img, (self.X0, y), (x, y), (200, 200, 200), 4, cv2.LINE_AA)
-        for a, b in flagged:
+        for a, b, color in stretches:
             xa, xb = self.x_at(a), self.x_at(b)
-            if xb - xa < _MIN_FLAGGED_W:
+            if xb - xa < _MIN_STRETCH_W:
                 mid = (xa + xb) // 2
-                xa, xb = mid - _MIN_FLAGGED_W // 2, mid + _MIN_FLAGGED_W // 2
-            cv2.rectangle(img, (xa, y - 3), (xb, y + 3), FLAGGED_COLOR, -1)
+                xa, xb = mid - _MIN_STRETCH_W // 2, mid + _MIN_STRETCH_W // 2
+            cv2.rectangle(img, (xa, y - 3), (xb, y + 3), color, -1)
 
         for m in markers:
             active = dragging_mark and m.id is not None and drag[1] == m.id

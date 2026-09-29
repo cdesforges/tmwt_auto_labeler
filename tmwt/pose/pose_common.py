@@ -139,31 +139,39 @@ def ankle_midpoint(pose, frame_shape):
     return (int(x * w), int(y * h))
 
 
-# Colour of points flagged as implausible (see draw_pose's `highlight`).
+# Colours of points flagged as implausible and of flagged points replaced by
+# smoothing (see draw_pose's `highlight` and `smoothed`).
 FLAGGED_COLOR = (0, 140, 255)   # orange
+SMOOTHED_COLOR = (0, 255, 255)  # yellow
 
 
-def draw_pose(img, pose, color=(0, 255, 0), point_radius=4, line_thickness=2, highlight=()):
+def draw_pose(img, pose, color=(0, 255, 0), point_radius=4, line_thickness=2, highlight=(),
+              smoothed=()):
     """
     Draw one pose's skeleton on `img` (in place): the connection lines, every
     body landmark, and the nose as the single face point. Missing landmarks
     are skipped. Landmarks in `highlight` (indices), and the lines to them,
-    are drawn in FLAGGED_COLOR with bigger points.
+    are drawn in FLAGGED_COLOR with bigger points; those in `smoothed` in
+    SMOOTHED_COLOR (taking precedence).
     """
     h, w = img.shape[:2]
 
     def px(lm):
         return (int(lm.x * w), int(lm.y * h))
 
+    def special(i):
+        """The colour of a flagged or smoothed landmark, else None."""
+        if i in smoothed:
+            return SMOOTHED_COLOR
+        return FLAGGED_COLOR if i in highlight else None
+
     for a, b in POSE_CONNECTIONS:
         if pose[a] is not None and pose[b] is not None:
-            flagged = a in highlight or b in highlight
-            cv2.line(img, px(pose[a]), px(pose[b]), FLAGGED_COLOR if flagged else color, line_thickness)
+            line_color = special(a) or special(b) or color
+            cv2.line(img, px(pose[a]), px(pose[b]), line_color, line_thickness)
 
     for i, lm in enumerate(pose):
         if lm is None or (i in FACE_IDXS and i != NOSE_IDX):
             continue
-        if i in highlight:
-            cv2.circle(img, px(lm), point_radius + 3, FLAGGED_COLOR, -1)
-        else:
-            cv2.circle(img, px(lm), point_radius, color, -1)
+        c = special(i)
+        cv2.circle(img, px(lm), point_radius + 3 if c else point_radius, c or color, -1)

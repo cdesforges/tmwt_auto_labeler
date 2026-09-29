@@ -15,7 +15,11 @@ For each saved video, next to <basename>.csv:
 pose_flags lists the subject's points the pose check found implausible in that
 frame, e.g. "left_small_toe:foot_length;right_heel:foot_length" (see
 tmwt/detection/pose_check.py); empty when none. Flagged points are left in the
-landmark columns unchanged, so it's up to the analysis whether to use them.
+landmark columns unchanged, so it's up to the analysis whether to use them,
+unless the reviewer chose to smooth them: then pose_smoothed lists the points
+whose landmark columns hold interpolated values instead (e.g.
+"left_small_toe"), and <basename>_pose_corrections.csv lists every replaced
+point with its original and new position (tmwt/detection/pose_smoothing.py).
   <basename>_annotated.mp4  the video with skeleton, rope and info panel.
   <basename>_skeleton.mp4   the same annotations on a black canvas (de-identified).
 
@@ -33,11 +37,12 @@ from tmwt.ui import annotate
 from tmwt.pose import pose_common
 from tmwt.core.job import COURSE_M
 from tmwt.core import report
-from tmwt.detection import pose_check
+from tmwt.detection import pose_check, pose_smoothing
 
 # Suffixes of the output files, appended to the CSV's basename.
 TIMING_SUFFIX = "_timing.json"
 ANNOTATED_SUFFIX = "_annotated.mp4"
+CORRECTIONS_SUFFIX = "_pose_corrections.csv"
 SKELETON_SUFFIX = "_skeleton.mp4"
 
 CORE_COLUMNS = [
@@ -55,7 +60,7 @@ CORE_COLUMNS = [
 ]
 HEADERS = CORE_COLUMNS + [f"lm_{i:02d}_{axis}"
                           for i in range(pose_common.NUM_LANDMARKS)
-                          for axis in ("x", "y", "z")] + ["pose_flags"]
+                          for axis in ("x", "y", "z")] + ["pose_flags", "pose_smoothed"]
 
 
 def output_paths(csv_path):
@@ -89,6 +94,7 @@ def _csv_row(result, frame_w, frame_h):
         for axis in ("x", "y", "z"):
             row[f"lm_{i:02d}_{axis}"] = round(getattr(lm, axis), 6) if lm is not None else ""
     row["pose_flags"] = pose_check.describe(result.pose_flags)
+    row["pose_smoothed"] = pose_check.names(result.pose_smoothed)
     return row
 
 
@@ -132,6 +138,11 @@ def row_flags(row):
     return pose_check.parse(row.get("pose_flags") or "")
 
 
+def row_smoothed(row):
+    """A row's pose_smoothed as a set of landmark indices (empty for older CSVs)."""
+    return pose_check.parse_names(row.get("pose_smoothed") or "")
+
+
 def row_pose(row):
     """A row's landmarks as a 33-entry pose (pose_common layout), or None if empty."""
     pose = []
@@ -140,6 +151,38 @@ def row_pose(row):
         z = row.get(f"lm_{i:02d}_z") or 0.0
         pose.append(pose_common.Landmark(x, y, z) if x is not None and y is not None else None)
     return pose if any(lm is not None for lm in pose) else None
+
+
+# --- Pose corrections ----------------------------------------------------------
+
+CORRECTIONS_COLUMNS = ["frame", "time_s", "landmark", "flag", "original_x", "original_y",
+                       "original_z", "smoothed_x", "smoothed_y", "smoothed_z"]
+
+
+def write_pose_corrections(job):
+    """
+    Write <basename>_pose_corrections.csv: every point the reviewer had
+    smoothed, with its original and new (normalized) position. Removes a stale
+    one if nothing was smoothed.
+    """
+    path = job.output_file(CORRECTIONS_SUFFIX)
+    if not job.pose_edits:
+        if os.path.exists(path):
+            os.remove(path)
+        return
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CORRECTIONS_COLUMNS)
+        writer.writeheader()
+        for e in sorted(job.pose_edits, key=lambda e: (e.frame, e.landmark)):
+            writer.writerow({
+                "frame": job.frames[e.frame].frame_idx,
+                "time_s": round(job.frames[e.frame].time_s, 4),
+                "landmark": pose_check.LANDMARK_NAMES[e.landmark],
+                "flag": e.kind,
+                **{f"original_{a}": round(getattr(e.original, a) or 0.0, 6) for a in "xyz"},
+                **{f"smoothed_{a}": round(getattr(e.smoothed, a) or 0.0, 6) for a in "xyz"},
+            })
+    print(f"  Pose corrections: {path}")
 
 
 # --- Timing --------------------------------------------------------------------
@@ -165,6 +208,9 @@ def write_timing(job):
             "result": report.pose_check_text(job),
             "processing": (job.analysis_meta.get("pose_check") or {}).get("result", ""),
             **pose_check.summary(job.pose_flags),
+            "smoothed_points": len(job.pose_edits),
+            "smoothed_frames": len({e.frame for e in job.pose_edits}),
+            "smoothing_method": pose_smoothing.METHOD if job.pose_edits else "",
         },
     }
     with open(path, "w") as f:
@@ -222,6 +268,7 @@ def save_job(job, on_progress=None):
                 writer.release()
 
     write_frames_csv(job.output_path, job.frames, w, h)
+    write_pose_corrections(job)
     write_timing(job)
     print(f"  Videos: {annotated_path}\n          {skeleton_path}")
     job.saved = True
