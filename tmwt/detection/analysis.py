@@ -14,13 +14,13 @@ the endpoints, the subject or the timing rules never re-runs pose estimation.
 
 import cv2
 
-import endpoints
-import people
-import timing
-import video_io
-from job import (FrameResult, STATUS_FAILED, STATUS_INCOMPLETE,
+from tmwt.detection import endpoints
+from tmwt.detection import people
+from tmwt.measurement import timing
+from tmwt.core import video_io
+from tmwt.core.job import (FrameResult, STATUS_FAILED, STATUS_INCOMPLETE,
                  STATUS_NEEDS_INPUT, STATUS_NO_BODY, STATUS_OK)
-from tracking import GroundTracker
+from tmwt.detection.tracking import GroundTracker
 
 
 def process_video(job, model_path, backend, matte_crop=True, on_progress=None):

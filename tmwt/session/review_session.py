@@ -9,18 +9,18 @@ label.py (processing and review in one go).
 
 import os
 
-import analysis
-import analysis_file
-import data_export
-import report
-import review
-import review_progress
-from job import (REVIEW_APPROVED, REVIEW_REJECTED, REVIEW_UNREVIEWED, STATUS_FAILED,
+from tmwt.detection import analysis
+from tmwt.core import analysis_file
+from tmwt.core import data_export
+from tmwt.core import report
+from tmwt.session import review
+from tmwt.session import review_progress
+from tmwt.core.job import (REVIEW_APPROVED, REVIEW_REJECTED, REVIEW_UNREVIEWED, STATUS_FAILED,
                  STATUS_INCOMPLETE, STATUS_NEEDS_INPUT, STATUS_NO_BODY, STATUS_OK,
                  VideoJob)
-from labeler_ui import (APPROVED_MARK, DONE, FAILED, NEEDS_INPUT, REJECTED_MARK, SAVED_MARK,
+from tmwt.ui.labeler_ui import (APPROVED_MARK, DONE, FAILED, NEEDS_INPUT, REJECTED_MARK, SAVED_MARK,
                         UNREVIEWED, WORKING, JumpTo, WindowClosed)
-from widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE
+from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE
 
 
 def make_jobs(videos, output_dir, endpoint_behavior):

@@ -21,10 +21,10 @@ import argparse
 import os
 import sys
 
-import processing
-import review_session
-from job import END_BEHAVIORS, END_FIRST_FOOT
-from labeler_ui import LabelerUI, WindowClosed
+from tmwt.detection import processing
+from tmwt.session import review_session
+from tmwt.core.job import END_BEHAVIORS, END_FIRST_FOOT
+from tmwt.ui.labeler_ui import LabelerUI, WindowClosed
 
 
 def parse_args():

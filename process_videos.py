@@ -24,9 +24,9 @@ import argparse
 import os
 import sys
 
-import analysis_file
-import processing
-from pose_backend import BACKENDS, DEVICES, get_backend
+from tmwt.core import analysis_file
+from tmwt.detection import processing
+from tmwt.pose.pose_backend import BACKENDS, DEVICES, get_backend
 
 
 def parse_args():

@@ -3,7 +3,7 @@ The window process: a resizable pygame window, driven by window.py.
 
 Started by window.Window as
 
-    python window_server.py <shared_memory_name> <width> <height> <title>
+    python -m tmwt.ui.window_server <shared_memory_name> <width> <height> <title>
 
 and never imported by the labeler itself. It must not import OpenCV: OpenCV's
 wheel bundles its own SDL2 (through FFmpeg), and loading two different SDL2
@@ -43,7 +43,7 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import numpy as np  # noqa: E402
 import pygame  # noqa: E402
 
-from window import CLOSE_KEY, KEY_LEFT, KEY_RIGHT  # noqa: E402  (constants only; no OpenCV)
+from tmwt.ui.window import CLOSE_KEY, KEY_LEFT, KEY_RIGHT  # noqa: E402  (constants only; no OpenCV)
 
 # Key codes sent for special keys; printable keys send their character code.
 _SPECIAL_KEYS = {

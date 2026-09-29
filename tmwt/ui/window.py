@@ -34,7 +34,10 @@ CLOSE_KEY = 27
 KEY_LEFT = 1001
 KEY_RIGHT = 1002
 
-_SERVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "window_server.py")
+# The window process runs as a module, with the repository root on its path so
+# it can import the tmwt package.
+_SERVER_MODULE = "tmwt.ui.window_server"
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class Window:
@@ -47,8 +50,11 @@ class Window:
         self._shm = shared_memory.SharedMemory(create=True, size=2 * int(np.prod(shape)))
         self._slots = np.ndarray((2,) + shape, dtype=np.uint8, buffer=self._shm.buf)
         self._next_slot = 0
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(
+            p for p in (_REPO_ROOT, os.environ.get("PYTHONPATH")) if p))
         self._proc = subprocess.Popen(
-            [sys.executable, _SERVER, self._shm.name, str(canvas_w), str(canvas_h), title],
+            [sys.executable, "-m", _SERVER_MODULE, self._shm.name, str(canvas_w), str(canvas_h), title],
+            env=env,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         self._messages = queue.Queue()
         threading.Thread(target=self._read_messages, daemon=True).start()

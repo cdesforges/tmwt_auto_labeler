@@ -20,7 +20,7 @@ Notes:
       it isn't reloaded for every video (see _load_inferencer).
 """
 
-from pose_common import halpe26_to_landmarks
+from tmwt.pose.pose_common import halpe26_to_landmarks
 
 try:
     from mmpose.apis import MMPoseInferencer

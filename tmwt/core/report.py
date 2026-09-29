@@ -10,7 +10,7 @@ import csv
 import os
 from datetime import datetime
 
-from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_FAILED, STATUS_NO_BODY
+from tmwt.core.job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_FAILED, STATUS_NO_BODY
 
 # Overall results, in the order they're listed.
 APPROVED = "approved"

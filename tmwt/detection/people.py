@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-import pose_common
-import tracking
+from tmwt.pose import pose_common
+from tmwt.detection import tracking
 
 # Most people detected per frame.
 MAX_PEOPLE = 5

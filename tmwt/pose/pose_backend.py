@@ -33,12 +33,12 @@ def get_backend(name):
         ImportError: if the backend module's dependencies are missing.
     """
     if name == "mediapipe":
-        import pose_mediapipe
+        from tmwt.pose import pose_mediapipe
         return pose_mediapipe
     if name == "mmpose":
-        import pose_mmpose
+        from tmwt.pose import pose_mmpose
         return pose_mmpose
     if name == "rtmlib":
-        import pose_rtmlib
+        from tmwt.pose import pose_rtmlib
         return pose_rtmlib
     raise ValueError(f"Unknown pose backend: {name!r}. Use one of {BACKENDS}.")

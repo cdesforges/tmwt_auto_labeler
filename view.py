@@ -30,13 +30,13 @@ import sys
 
 import numpy as np
 
-import annotate
-import data_export
-import timing
-from job import COURSE_M
-from labeler_ui import DONE, FAILED, UNREVIEWED, WAITING, JumpTo, LabelerUI, WindowClosed
-from player import Player
-from widgets import GREEN, GREY, KEY_ESC, RED, WHITE
+from tmwt.ui import annotate
+from tmwt.core import data_export
+from tmwt.measurement import timing
+from tmwt.core.job import COURSE_M
+from tmwt.ui.labeler_ui import DONE, FAILED, UNREVIEWED, WAITING, JumpTo, LabelerUI, WindowClosed
+from tmwt.ui.player import Player
+from tmwt.ui.widgets import GREEN, GREY, KEY_ESC, RED, WHITE
 
 # Sidebar legend for the viewer.
 LEGEND = [("approved", GREEN), ("not reviewed", GREY), ("incomplete", RED),

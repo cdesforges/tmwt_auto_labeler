@@ -20,14 +20,14 @@ them, time the video manually, or skip it.
 
 import cv2
 
-import annotate
-import people
-import timing
-import video_io
-from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_NO_BODY
-from labeler_ui import APPROVED_MARK, DONE, FAILED, REJECTED_MARK, WORKING
-from player import Player
-from widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, KEY_SPACE, ORANGE, RED, WHITE
+from tmwt.ui import annotate
+from tmwt.detection import people
+from tmwt.measurement import timing
+from tmwt.core import video_io
+from tmwt.core.job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_NO_BODY
+from tmwt.ui.labeler_ui import APPROVED_MARK, DONE, FAILED, REJECTED_MARK, WORKING
+from tmwt.ui.player import Player
+from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, KEY_SPACE, ORANGE, RED, WHITE
 
 QUIT = "quit"
 # Outcomes of setting endpoints (_set_endpoints).

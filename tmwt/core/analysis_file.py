@@ -32,10 +32,10 @@ from datetime import datetime
 
 import numpy as np
 
-import pose_common
-import video_io
-from job import STATUS_FAILED, FrameResult
-from video_io import VideoInfo
+from tmwt.pose import pose_common
+from tmwt.core import video_io
+from tmwt.core.job import STATUS_FAILED, FrameResult
+from tmwt.core.video_io import VideoInfo
 
 FORMAT_VERSION = 1
 ANALYSIS_DIR = "tmwt_analysis"

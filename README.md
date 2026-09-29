@@ -298,10 +298,10 @@ position, the start is found by working backwards from that end:
    the forward swing.
 
 Distances are perspective-corrected using the vanishing point of the subject's
-own walk (see `metric.py`). Ankle positions are projected onto the walking line
+own walk (see `tmwt/measurement/metric.py`). Ankle positions are projected onto the walking line
 first, so sideways sway does not read as forward movement. The detection and its
-tuning constants live in `onset.py`; `timing.py` combines it with the line
-crossings.
+tuning constants live in `tmwt/measurement/onset.py`; `tmwt/measurement/timing.py`
+combines it with the line crossings.
 
 When the far endpoint was clicked as a start line, the start is the moment the
 ankles cross it if the subject was standing behind it. If they were already on or
@@ -368,35 +368,48 @@ its final frame. Close the window (or press Esc) to quit.
 
 ## Repository layout
 
+The four scripts you run are at the top level; everything else is in the
+`tmwt/` package, grouped by what it does.
+
 ```
-process_videos.py    # Step 1 (e.g. on a cluster): processing, writes tmwt_analysis/*.npz
-review_videos.py     # Step 2 (locally): review from the analysis files
-label.py             # Both steps in one go, locally
-processing.py        # Processing a folder: skip / process / save analysis files
-analysis_file.py     # The analysis file format: save, load, video fingerprint
-review_session.py    # Loading, reviewing, saving and reporting a folder
-review_progress.py   # Saving / restoring an unfinished review
-job.py               # Data model: VideoJob (one per video) and FrameResult (one per frame)
-video_io.py          # Opening videos: first content frame, matte crop, playback clock
-matte.py             # Letterbox / pillarbox detection and the cropping capture wrapper
-endpoints.py         # Finish line from the ArUco marker
-analysis.py          # Slow part (pose + tracking per frame) and fast part (subject, endpoints, timing)
-tracking.py          # Ground-plane optical-flow tracker (camera drift)
-metric.py            # Geometry: t_along and perspective-correct distance along the course
-onset.py             # Hindsight walk-start detection on distance signals
-timing.py            # Walk start/end from the analysed frames
-review.py            # Phase 2: real-time playback and the review flow
-people.py            # Following everyone in view and choosing the walking subject
-labeler_ui.py        # The labeler's screens: progress, playback, buttons, endpoint picking, sidebar
-window.py            # The window as the labeler sees it: show a canvas, poll for keys and clicks
-window_server.py     # The window process: resizable pygame window, canvas scaled to fit
-annotate.py          # Frame drawing (skeleton, rope, info panel) shared with view.py
-data_export.py       # Per-video outputs (CSV, timing JSON, videos) and reading them back
-report.py            # End-of-run labeling report
-view.py              # Skeleton-only playback of saved CSVs
-pose_backend.py      # Pose backend factory
-pose_common.py       # Shared pose layout (body + feet), drawing and ankle helpers
-pose_mediapipe.py    # MediaPipe backend
-pose_mmpose.py       # MMPose backend
-pose_rtmlib.py       # RTMLib (ONNX Runtime) backend
+process_videos.py         # Step 1 (e.g. on a cluster): processing, writes tmwt_analysis/*.npz
+review_videos.py          # Step 2 (locally): review from the analysis files
+label.py                  # Both steps in one go, locally
+view.py                   # Skeleton-only playback of saved CSVs
+
+tmwt/
+  core/                   # Data model, video access and file outputs
+    job.py                #   VideoJob (one per video) and FrameResult (one per frame)
+    video_io.py           #   Opening videos consistently; in-order frame cache for playback
+    matte.py              #   Letterbox / pillarbox detection and cropping
+    analysis_file.py      #   The analysis file format: save, load, video fingerprint
+    data_export.py        #   Per-video outputs (CSV, timing JSON, videos) and reading them back
+    report.py             #   End-of-run labeling report
+  pose/                   # Pose estimation
+    pose_backend.py       #   Backend factory
+    pose_common.py        #   Shared landmark layout (body + feet), drawing and ankle helpers
+    pose_rtmlib.py        #   RTMLib (ONNX Runtime) backend
+    pose_mediapipe.py     #   MediaPipe backend
+    pose_mmpose.py        #   MMPose backend
+  detection/              # The analysis
+    analysis.py           #   Slow part (pose + tracking per frame) and fast part (subject, endpoints, timing)
+    processing.py         #   Processing a folder: skip / process / save analysis files
+    tracking.py           #   Ground-plane optical-flow tracker (camera drift)
+    people.py             #   Following everyone in view and choosing the walking subject
+    endpoints.py          #   Finish line from the ArUco marker
+  measurement/            # Turning positions into timing
+    metric.py             #   Geometry: t_along and perspective-correct distance along the course
+    onset.py              #   Hindsight walk-start detection on distance signals
+    timing.py             #   Walk start / end from the analysed frames
+  session/                # The review
+    review.py             #   Reviewing one video: playback, prompt, endpoints, manual timing
+    review_session.py     #   Loading, reviewing, saving and reporting a folder
+    review_progress.py    #   Saving / restoring an unfinished review
+  ui/                     # The window and what's drawn in it
+    window.py             #   The window as the program sees it: show a canvas, poll for input
+    window_server.py      #   The window process: resizable pygame window
+    labeler_ui.py         #   The labeler's screens, sidebar and input handling
+    widgets.py            #   Colours, key codes, buttons, icons and the seek bar
+    player.py             #   Playback controls shared by the review and the viewer
+    annotate.py           #   Frame drawing (skeleton, rope, info panel)
 ```

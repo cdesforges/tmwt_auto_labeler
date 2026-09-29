@@ -19,10 +19,10 @@ import json
 import os
 from datetime import datetime
 
-import analysis_file
-import people
-import timing
-from job import REVIEW_UNREVIEWED, STATUS_FAILED
+from tmwt.core import analysis_file
+from tmwt.detection import people
+from tmwt.measurement import timing
+from tmwt.core.job import REVIEW_UNREVIEWED, STATUS_FAILED
 
 FORMAT_VERSION = 1
 FILE_NAME = "review_progress.json"

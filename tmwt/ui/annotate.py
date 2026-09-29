@@ -7,8 +7,8 @@ with the walk status and timer.
 import cv2
 import numpy as np
 
-import pose_common
-from job import COURSE_M
+from tmwt.pose import pose_common
+from tmwt.core.job import COURSE_M
 
 # Width (px) of the info panel placed to the right of each frame.
 PANEL_W = 300

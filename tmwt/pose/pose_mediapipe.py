@@ -9,7 +9,7 @@ small-toe slots it doesn't predict are padded with None.
 import cv2
 import mediapipe as mp
 
-from pose_common import NUM_LANDMARKS
+from tmwt.pose.pose_common import NUM_LANDMARKS
 
 # Default model path (relative to the project root).
 DEFAULT_MODEL_PATH = "models/pose_landmarker_full.task"

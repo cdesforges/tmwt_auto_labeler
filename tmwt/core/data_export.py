@@ -21,9 +21,9 @@ import os
 
 import cv2
 
-import annotate
-import pose_common
-from job import COURSE_M
+from tmwt.ui import annotate
+from tmwt.pose import pose_common
+from tmwt.core.job import COURSE_M
 
 # Suffixes of the output files, appended to the CSV's basename.
 TIMING_SUFFIX = "_timing.json"

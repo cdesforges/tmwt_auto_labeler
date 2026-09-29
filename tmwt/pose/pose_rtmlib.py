@@ -32,7 +32,7 @@ Notes:
 import os
 import platform
 
-from pose_common import halpe26_to_landmarks
+from tmwt.pose.pose_common import halpe26_to_landmarks
 
 try:
     import onnxruntime

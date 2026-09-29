@@ -32,12 +32,12 @@ import time
 import cv2
 import numpy as np
 
-import pose_common
-from widgets import (BAR_H, BTN_H, DIM, FONT, GREEN, GREY, HEADER_H, KEY_BACKSPACE,
+from tmwt.pose import pose_common
+from tmwt.ui.widgets import (BAR_H, BTN_H, DIM, FONT, GREEN, GREY, HEADER_H, KEY_BACKSPACE,
                      KEY_ENTER, KEY_ESC, MAIN_H, MAIN_W, ORANGE, RED, WHITE, YELLOW, BLUE,
                      SEEK_H, Button, bar_buttons, button_row, dimmed, draw_seek_bar,
                      frame_screen, on_seek_bar, put_centered, seek_fraction, truncate)
-from window import Window
+from tmwt.ui.window import Window
 
 WINDOW = "TMWT Labeler"
 SIDEBAR_W = 320

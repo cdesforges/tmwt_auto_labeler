@@ -24,8 +24,8 @@ from collections import deque
 
 import numpy as np
 
-from widgets import KEY_SPACE
-from window import KEY_LEFT, KEY_RIGHT
+from tmwt.ui.widgets import KEY_SPACE
+from tmwt.ui.window import KEY_LEFT, KEY_RIGHT
 
 # Recent frames remembered, to find what was on screen when a button was
 # pressed (a few seconds' worth).

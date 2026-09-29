@@ -21,8 +21,8 @@ from typing import List, Optional
 
 import numpy as np
 
-import video_io
-from video_io import VideoInfo
+from tmwt.core import video_io
+from tmwt.core.video_io import VideoInfo
 
 # Real length of the walking course, in metres. far_ep is 0 m, near_ep is COURSE_M.
 COURSE_M = 10.0

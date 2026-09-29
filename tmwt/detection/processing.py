@@ -15,12 +15,12 @@ import traceback
 import cv2
 import numpy as np
 
-import analysis
-import analysis_file
-import people
-import pose_common
-from job import STATUS_FAILED, VideoJob
-from labeler_ui import DONE, FAILED, WORKING, WindowClosed
+from tmwt.detection import analysis
+from tmwt.core import analysis_file
+from tmwt.detection import people
+from tmwt.pose import pose_common
+from tmwt.core.job import STATUS_FAILED, VideoJob
+from tmwt.ui.labeler_ui import DONE, FAILED, WORKING, WindowClosed
 
 # Video file extensions to look for.
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v"}

@@ -16,11 +16,11 @@ Line crossings use t_along (position along the rope in image space, 0 = far,
 1 = near), smoothed with an EMA to suppress keypoint jitter.
 """
 
-import metric
-import onset
-import pose_common
-import tracking
-from job import COURSE_M, END_ANKLE_MIDPOINT
+from tmwt.measurement import metric
+from tmwt.measurement import onset
+from tmwt.pose import pose_common
+from tmwt.detection import tracking
+from tmwt.core.job import COURSE_M, END_ANKLE_MIDPOINT
 
 # EMA weight on the newest t_along sample.
 SMOOTH_ALPHA = 0.7

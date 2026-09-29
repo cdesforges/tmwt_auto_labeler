@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-import matte
+from tmwt.core import matte
 
 # Frames darker than this mean pixel value are treated as leading black frames.
 BLACK_FRAME_MEAN = 10
