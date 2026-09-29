@@ -33,6 +33,9 @@ CLOSE_KEY = 27
 # Arrow keys, which have no character code; outside the 0-255 range of other keys.
 KEY_LEFT = 1001
 KEY_RIGHT = 1002
+# A held arrow key's repeats older than this are dropped rather than acted on,
+# so a slow screen doesn't pile them up and keep stepping after the key is let go.
+_STALE_REPEAT_S = 0.1
 
 # The window process runs as a module, with the repository root on its path so
 # it can import the tmwt package.
@@ -92,6 +95,8 @@ class Window:
             except queue.Empty:
                 return KEY_NONE
             if "key" in message:
+                if "repeat" in message and time.time() - message["repeat"] > _STALE_REPEAT_S:
+                    continue
                 return message["key"]
             pos = (message["x"], message["y"])
             self.mouse_pos = pos
@@ -101,7 +106,7 @@ class Window:
                 self.mouse_events.append((message["mouse"], pos))
 
     def post_test_event(self, spec):
-        """Test hook: inject a resize or mouse event (see window_server._test_event)."""
+        """Test hook: inject a resize, mouse or key event (see window_server._test_event)."""
         self._send("post " + json.dumps(spec))
 
     @property

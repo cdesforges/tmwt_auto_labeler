@@ -24,6 +24,8 @@ Protocol, one line per message:
                    pixels, as if the user did it (see _test_event)
   stdout (to window.py), JSON:
     {"key": code}                                  key press, cv2.waitKey-style code
+    {"key": code, "repeat": t}                     held arrow key repeating (see
+                                                   _KeyRepeat); t = when sent (time.time())
     {"mouse": "down" | "up" | "move", "x": x, "y": y}   left button / pointer, canvas pixels
     {"wheel": dy, "x": x, "y": y}                  scroll (positive = up / back), pointer position
 
@@ -36,6 +38,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from multiprocessing import resource_tracker, shared_memory
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
@@ -64,6 +67,40 @@ _REPAINT_EVENTS = {pygame.VIDEORESIZE, pygame.VIDEOEXPOSE,
 
 # Event-loop period.
 _LOOP_MS = 5
+
+
+class _KeyRepeat:
+    """
+    Repeats held arrow keys, so holding one keeps stepping through the video.
+    Only the arrows repeat: pygame's own key repeat would repeat every key, and
+    holding Enter on a prompt must not answer several prompts.
+    """
+
+    KEYS = (pygame.K_LEFT, pygame.K_RIGHT)
+    DELAY_S = 0.3        # hold this long before repeating starts
+    INTERVAL_S = 0.035   # then one repeat per interval (about 28 frames a second)
+
+    def __init__(self):
+        self._next = {}  # held key -> when its next repeat is due (time.monotonic)
+
+    def handle(self, event):
+        """Track presses and releases of the repeating keys (and forget them on focus loss)."""
+        if event.type == pygame.KEYDOWN and event.key in self.KEYS:
+            self._next[event.key] = time.monotonic() + self.DELAY_S
+        elif event.type == pygame.KEYUP:
+            self._next.pop(event.key, None)
+        elif event.type == pygame.WINDOWFOCUSLOST:
+            self._next.clear()
+
+    def due(self):
+        """Messages for the repeats now due."""
+        now = time.monotonic()
+        messages = []
+        for key, when in self._next.items():
+            if now >= when:
+                messages.append({"key": _SPECIAL_KEYS[key], "repeat": time.time()})
+                self._next[key] = max(when + self.INTERVAL_S, now)
+        return messages
 
 
 class _Display:
@@ -137,11 +174,16 @@ class _Display:
 
 def _test_event(spec, display):
     """
-    Test hook for the "post" command: a resize, or a mouse event at a canvas
-    position (converted to window pixels, so the real mapping back is exercised).
+    Test hook for the "post" command: a resize, an arrow / Enter key press or
+    release, or a mouse event at a canvas position (converted to window pixels,
+    so the real mapping back is exercised).
     """
     if spec["type"] == "quit":
         return pygame.event.Event(pygame.QUIT)
+    if spec["type"] in ("key_down", "key_up"):
+        key = {"left": pygame.K_LEFT, "right": pygame.K_RIGHT, "enter": pygame.K_RETURN}[spec["key"]]
+        kind = pygame.KEYDOWN if spec["type"] == "key_down" else pygame.KEYUP
+        return pygame.event.Event(kind, key=key, mod=0, unicode="", scancode=0)
     if spec["type"] == "wheel":
         display.pointer = display.to_window((spec["x"], spec["y"]))
         return pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=int(spec["dy"]),
@@ -178,6 +220,7 @@ def main(argv):
     slots = np.ndarray((2, h, w, 3), dtype=np.uint8, buffer=shm.buf)
     display = _Display(title, w, h)
 
+    repeat = _KeyRepeat()
     commands = queue.Queue()
     threading.Thread(target=_read_commands, args=(commands,), daemon=True).start()
     try:
@@ -198,9 +241,12 @@ def main(argv):
                 if event.type == pygame.QUIT:
                     _send({"key": CLOSE_KEY})
                     return
+                repeat.handle(event)
                 message = display.message_for(event)
                 if message is not None:
                     _send(message)
+            for message in repeat.due():
+                _send(message)
             pygame.time.wait(_LOOP_MS)
     finally:
         del slots

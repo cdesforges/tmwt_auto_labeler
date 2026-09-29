@@ -205,8 +205,8 @@ review) a **save** button (floppy disk); the folder's name in the middle
    overlaid. Below it: a seek bar (drag or click to scrub; the walk's start and
    end are marked in green and red), the mark buttons (a **green dot** marks the
    walk start and a **red dot** the stop, at the frame on screen; `M` presses
-   them in turn), frame-back / play-pause / frame-forward buttons (←, Space, →),
-   and **Skip to review**. Hover over an icon button to see what it does.
+   them in turn), frame-back / play-pause / frame-forward buttons (←, Space, →;
+   hold an arrow key to keep stepping), and **Skip to review**. Hover over an icon button to see what it does.
    **Correcting the timing while you watch:** pause, then mark the start or
    stop again with the dot buttons, or drag a mark along the seek bar by the
    small tab under it (the picture follows, and the playhead hides while you
@@ -387,9 +387,9 @@ its walk time. Click a recording to play it. The buttons below the picture:
 | Button | Key   | Effect |
 |--------|-------|--------|
 | `|◀◀`  | P     | Previous recording |
-| `|◀`   | ←     | Step back one frame (pauses) |
+| `|◀`   | ←     | Step back one frame (pauses); hold ← to keep stepping back |
 | `▶` / `‖` | Space | Play / pause |
-| `▶|`   | →     | Step forward one frame (pauses) |
+| `▶|`   | →     | Step forward one frame (pauses); hold → to keep stepping forward |
 | `▶▶|`  | N     | Next recording |
 
 Above the buttons, a seek bar: drag it (or click on it) to scrub through the
