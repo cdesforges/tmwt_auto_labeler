@@ -1,9 +1,11 @@
 """
-The labeler's single window. Nothing else in the labeler opens a window.
+The labeler's single window. Nothing else in the labeler opens a window, and
+every choice the user makes is a clickable button (most also have an optional
+keyboard shortcut).
 
 Two regions:
-  - Main area (left): analysis progress, real-time playback, endpoint picking
-    and the review prompt (clickable buttons, or their keyboard shortcuts).
+  - Main area (left): analysis progress, real-time playback, endpoint picking,
+    the review prompt and messages.
   - Sidebar (right): every video in the batch, colour-coded by state:
       white  = waiting
       yellow = being analysed / reviewed / saved
@@ -11,6 +13,9 @@ Two regions:
       orange = needs your input at review (e.g. endpoints must be clicked)
       red    = failed or rejected
       grey   = saved without review
+
+Buttons are described by specs, (text, value, keys): the label, the value
+returned when it is chosen, and the key codes that also choose it.
 """
 
 import time
@@ -38,6 +43,7 @@ KEY_NONE = 255
 KEY_ESC = 27
 KEY_ENTER = (13, 10)
 KEY_BACKSPACE = (8, 127)
+KEY_SPACE = ord(" ")
 
 # Sidebar states and their colours.
 WAITING = "waiting"
@@ -57,23 +63,22 @@ STATE_COLORS = {
 _LEGEND = [("waiting", WHITE), ("working", YELLOW), ("done", GREEN),
            ("needs input", ORANGE), ("failed", RED)]
 
-# Review prompt: (key label, description, choice id), and the keys for each choice.
+# Review prompt options: (shortcut label, text, value, keys).
 REVIEW_OPTIONS = [
-    ("1", "Looks good", "approve"),
-    ("2", "Rope endpoints inaccurate (re-click them)", "endpoints"),
-    ("3", "Walk start/stop inaccurate (time it manually)", "timing"),
-    ("4", "Body not detected (skip this file)", "body"),
-    ("R", "Replay", "replay"),
-    ("Esc", "Quit review (save the rest unreviewed)", "quit"),
+    ("1", "Looks good", "approve", (ord("1"),) + KEY_ENTER),
+    ("2", "Rope endpoints inaccurate (re-click them)", "endpoints", (ord("2"),)),
+    ("3", "Walk start/stop inaccurate (time it manually)", "timing", (ord("3"),)),
+    ("4", "Body not detected (skip this file)", "body", (ord("4"),)),
+    ("R", "Replay", "replay", (ord("r"), ord("R"))),
+    ("Esc", "Quit review (save the rest unreviewed)", "quit", (KEY_ESC,)),
 ]
-_REVIEW_KEYS = {
-    ord("1"): "approve", **{k: "approve" for k in KEY_ENTER},
-    ord("2"): "endpoints",
-    ord("3"): "timing",
-    ord("4"): "body",
-    ord("r"): "replay", ord("R"): "replay",
-    KEY_ESC: "quit",
-}
+
+# Layout.
+BTN_H = 44
+BAR_H = 64            # bottom button bar on image screens
+HEADER_H = 84         # instruction strip above the frame when picking endpoints
+_BTN_GAP = 16
+_BTN_MIN_W = 150
 
 # Minimum interval between progress redraws, so drawing never slows analysis.
 _PROGRESS_REDRAW_S = 0.07
@@ -125,6 +130,18 @@ def _dimmed(img, brightness):
     return (_fit(img, MAIN_W, MAIN_H)[0] * brightness).astype(np.uint8)
 
 
+def _frame_screen(img, top=0):
+    """
+    Main-area canvas with `img` fitted between a `top` strip and the bottom
+    button bar. Returns (canvas, scale, x0, y0) like _fit, in canvas pixels.
+    """
+    main = np.zeros((MAIN_H, MAIN_W, 3), dtype=np.uint8)
+    fitted, s, x0, y0 = _fit(img, MAIN_W, MAIN_H - top - BAR_H)
+    main[top:MAIN_H - BAR_H] = fitted
+    cv2.rectangle(main, (0, MAIN_H - BAR_H), (MAIN_W, MAIN_H), (20, 20, 20), -1)
+    return main, s, x0, y0 + top
+
+
 class Button:
     """
     A clickable button drawn with OpenCV, behaving like a standard UI button:
@@ -142,11 +159,12 @@ class Button:
     # Inset shadow lines along the top and left edges when pressed, outermost first.
     _SHADOW = ((0, 0, 0), (6, 6, 6), (12, 12, 12), (18, 18, 18), (24, 24, 24), (30, 30, 30))
 
-    def __init__(self, rect, key_label, text, value):
+    def __init__(self, rect, text, value, keys=(), key_label=""):
         self.x, self.y, self.w, self.h = rect
-        self.key_label = key_label  # keyboard shortcut shown on the button
         self.text = text
-        self.value = value          # returned when clicked
+        self.value = value          # returned when chosen
+        self.keys = keys            # key codes that also choose it
+        self.key_label = key_label  # shortcut shown at the left; text is centred if empty
 
     def contains(self, pt):
         return (pt is not None and self.x <= pt[0] < self.x + self.w
@@ -164,9 +182,32 @@ class Button:
                 cv2.line(img, (x0 + k, y0 + k), (x0 + k, y1), shade, 1)
             shift = 2
         cv2.rectangle(img, (x0, y0), (x1, y1), border, 1)
+
         base_y = y0 + self.h // 2 + 7 + shift
-        cv2.putText(img, self.key_label, (x0 + 16 + shift, base_y), FONT, 0.6, YELLOW, 2, cv2.LINE_AA)
-        cv2.putText(img, self.text, (x0 + 80 + shift, base_y), FONT, 0.6, WHITE, 1, cv2.LINE_AA)
+        if self.key_label:
+            cv2.putText(img, self.key_label, (x0 + 16 + shift, base_y), FONT, 0.6, YELLOW, 2, cv2.LINE_AA)
+            text_x = x0 + 80
+        else:
+            (tw, _), _ = cv2.getTextSize(self.text, FONT, 0.6, 1)
+            text_x = x0 + (self.w - tw) // 2
+        cv2.putText(img, self.text, (text_x + shift, base_y), FONT, 0.6, WHITE, 1, cv2.LINE_AA)
+
+
+def button_row(specs, y):
+    """Buttons for `specs` (text, value, keys), side by side and centred at height y."""
+    widths = [max(_BTN_MIN_W, cv2.getTextSize(text, FONT, 0.6, 1)[0][0] + 48)
+              for text, _, _ in specs]
+    x = (MAIN_W - sum(widths) - _BTN_GAP * (len(specs) - 1)) // 2
+    buttons = []
+    for (text, value, keys), w in zip(specs, widths):
+        buttons.append(Button((x, y, w, BTN_H), text, value, keys))
+        x += w + _BTN_GAP
+    return buttons
+
+
+def _bar_buttons(specs):
+    """Button row in the bottom bar of an image screen."""
+    return button_row(specs, MAIN_H - BAR_H + (BAR_H - BTN_H) // 2)
 
 
 class LabelerUI:
@@ -179,7 +220,9 @@ class LabelerUI:
         self.active = None            # index of the highlighted file, or None
         self._last_progress_draw = 0.0
         self._mouse_pos = None        # latest pointer position, window pixels
-        self._mouse_events = deque()  # ("down" | "up", (x, y)) since last consumed
+        self._mouse_events = deque()  # ("down" | "up", (x, y)) not yet handled
+        self._armed = None            # value of the button the mouse is pressed on
+        self._armed_at = None         # when that press happened (perf_counter)
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WINDOW, MAIN_W + SIDEBAR_W, MAIN_H)
         cv2.setMouseCallback(WINDOW, self._on_mouse)
@@ -240,42 +283,97 @@ class LabelerUI:
             x += tw + 26
         return panel
 
+    # --- Showing a screen and handling input -----------------------------------
+
     def _show(self, main, wait_ms):
         """Display `main` + sidebar and wait up to wait_ms for a key (KEY_NONE if none)."""
         cv2.imshow(WINDOW, np.hstack([main, self._sidebar()]))
         return cv2.waitKey(max(1, int(wait_ms))) & 0xFF
 
-    def _wait_for_key(self, main):
-        """Display `main` until any key is pressed; return it."""
+    def _new_screen(self):
+        """Forget clicks and presses left over from the previous screen."""
+        self._mouse_events.clear()
+        self._armed = self._armed_at = None
+
+    def _draw_buttons(self, img, buttons):
+        for b in buttons:
+            over = b.contains(self._mouse_pos)
+            if self._armed == b.value:
+                state = "pressed" if over else "normal"
+            else:
+                state = "hover" if over and self._armed is None else "normal"
+            b.draw(img, state)
+
+    def _handle_input(self, buttons, key):
+        """
+        Apply a key and the queued mouse events to `buttons`.
+
+        Returns:
+            (value, pressed_at, other_clicks): the chosen button's value (or
+            None), when it was pressed (perf_counter), and mouse presses that
+            didn't land on a button (window pixels).
+        """
+        now = time.perf_counter()
+        for b in buttons:
+            if key in b.keys:
+                return b.value, now, []
+        chosen = pressed_at = None
+        other_clicks = []
+        while self._mouse_events:
+            kind, pt = self._mouse_events.popleft()
+            hit = next((b for b in buttons if b.contains(pt)), None)
+            if kind == "down":
+                if hit is None:
+                    other_clicks.append(pt)
+                self._armed = hit.value if hit else None
+                self._armed_at = now
+            elif kind == "up":
+                if (chosen is None and hit is not None and self._armed == hit.value):
+                    chosen, pressed_at = hit.value, self._armed_at
+                self._armed = None
+        return chosen, pressed_at, other_clicks
+
+    def _interact(self, main, buttons, wait_ms):
+        """Draw `buttons` over `main`, show it for up to wait_ms, and handle input."""
+        img = main.copy()
+        self._draw_buttons(img, buttons)
+        return self._handle_input(buttons, self._show(img, wait_ms))
+
+    def _wait_for_choice(self, main, buttons):
+        """Show `main` with `buttons` until one is chosen; return its value."""
+        self._new_screen()
         while True:
-            key = self._show(main, 50)
-            if key != KEY_NONE:
-                return key
+            value, _, _ = self._interact(main, buttons, 20)
+            if value is not None:
+                return value
 
     # --- Screens ---------------------------------------------------------------
 
-    def show_progress(self, title, subtitle, fraction, preview=None, force=False):
+    def show_progress(self, title, subtitle, fraction, preview=None, force=False,
+                      cancellable=False):
         """
         Progress screen: a title, subtitle and progress bar over an optional
-        dimmed preview frame. Redraws are throttled unless `force`.
+        dimmed preview frame, plus a Cancel button if `cancellable`. Redraws are
+        throttled unless `force`; input is handled on every call.
 
         Args:
             preview: an image, or a zero-argument callable returning one (so the
                 caller only builds it when a redraw actually happens).
 
         Returns:
-            The key pressed, or KEY_NONE.
+            True if the user asked to cancel.
         """
+        buttons = button_row([("Cancel", "cancel", (KEY_ESC,))], MAIN_H - 90) if cancellable else []
         now = time.perf_counter()
         if not force and now - self._last_progress_draw < _PROGRESS_REDRAW_S:
-            return cv2.waitKey(1) & 0xFF
+            value, _, _ = self._handle_input(buttons, cv2.waitKey(1) & 0xFF)
+            return value == "cancel"
         self._last_progress_draw = now
 
         main = _dimmed(preview() if callable(preview) else preview, _DIM_PROGRESS)
         cy = MAIN_H // 2
         _put_centered(main, title, cy - 40, 0.9, WHITE, 2)
         _put_centered(main, subtitle, cy - 5, 0.6, GREY, 1)
-
         bar_w, bar_h = 560, 22
         bx, by = (MAIN_W - bar_w) // 2, cy + 20
         fraction = min(max(fraction, 0.0), 1.0)
@@ -283,93 +381,83 @@ class LabelerUI:
         cv2.rectangle(main, (bx, by), (bx + int(bar_w * fraction), by + bar_h), YELLOW, -1)
         cv2.rectangle(main, (bx, by), (bx + bar_w, by + bar_h), GREY, 1)
         _put_centered(main, f"{fraction * 100:.0f}%", by + bar_h + 28, 0.55, WHITE, 1)
-        _put_centered(main, "Esc = quit", MAIN_H - 20, 0.45, DIM, 1)
-        return self._show(main, 1)
+        value, _, _ = self._interact(main, buttons, 1)
+        return value == "cancel"
 
-    def show_frame(self, img, wait_ms, header=None):
-        """Show one playback frame, waiting up to wait_ms; returns the key pressed."""
-        main = _fit(img, MAIN_W, MAIN_H)[0]
-        if header:
-            cv2.putText(main, header, (12, 24), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
-        return self._show(main, wait_ms)
-
-    def show_message(self, lines, background=None):
+    def show_frame(self, img, wait_ms, specs, label=None):
         """
-        Centered message over an optional dimmed background, shown until a key
-        is pressed. `lines` is a list of (text, colour); the first is the title.
-        Returns the key.
+        One playback frame above a bar of buttons, shown for up to wait_ms.
+
+        Args:
+            specs: button specs for the bar, (text, value, keys).
+            label: optional text at the left of the bar (e.g. the mode).
+
+        Returns:
+            (value, pressed_at): the chosen button's value or None, and when it
+            was pressed (perf_counter) — use that, not the release, for timing.
+        """
+        main, _, _, _ = _frame_screen(img)
+        if label:
+            cv2.putText(main, label, (16, MAIN_H - BAR_H // 2 + 6), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
+        value, pressed_at, _ = self._interact(main, _bar_buttons(specs), wait_ms)
+        return value, pressed_at
+
+    def start_playback(self):
+        """Call before a playback loop so clicks from the previous screen are ignored."""
+        self._new_screen()
+
+    def show_message(self, lines, specs, background=None):
+        """
+        A centered message over an optional dimmed background, with a row of
+        buttons below it. `lines` is a list of (text, colour); the first is the
+        title. Returns the chosen button's value.
         """
         main = _dimmed(background, _DIM_MESSAGE)
-        y = MAIN_H // 2 - 18 * len(lines)
+        y = MAIN_H // 2 - 18 * len(lines) - 30
         for k, (text, color) in enumerate(lines):
             _put_centered(main, text, y, 0.8 if k == 0 else 0.55, color, 2 if k == 0 else 1)
             y += 45 if k == 0 else 30
-        return self._wait_for_key(main)
+        return self._wait_for_choice(main, button_row(specs, y + 20))
 
     def ask_review(self, background, summary_lines, note=None):
         """
         The review prompt over the last frame: the detection summary and one
-        button per option in REVIEW_OPTIONS. Options can be clicked or chosen
-        with their keyboard shortcut. Returns the chosen option's id.
+        button per option in REVIEW_OPTIONS. Returns the chosen option's value.
         """
-        base = _dimmed(background, _DIM_PROMPT)
+        main = _dimmed(background, _DIM_PROMPT)
         y = 110
-        _put_centered(base, "Was the detection successful?", y, 0.9, WHITE, 2)
+        _put_centered(main, "Was the detection successful?", y, 0.9, WHITE, 2)
         y += 40
         for text in summary_lines:
-            _put_centered(base, text, y, 0.55, GREY, 1)
+            _put_centered(main, text, y, 0.55, GREY, 1)
             y += 26
         y += 16
 
-        btn_w, btn_h, gap = 560, 44, 10
+        btn_w, gap = 560, 10
         buttons = []
-        for key_label, text, value in REVIEW_OPTIONS:
-            buttons.append(Button(((MAIN_W - btn_w) // 2, y, btn_w, btn_h), f"[{key_label}]", text, value))
-            y += btn_h + gap
+        for key_label, text, value, keys in REVIEW_OPTIONS:
+            buttons.append(Button(((MAIN_W - btn_w) // 2, y, btn_w, BTN_H), text, value,
+                                  keys, key_label=f"[{key_label}]"))
+            y += BTN_H + gap
         if note:
-            _put_centered(base, note, y + 18, 0.55, ORANGE, 1)
+            _put_centered(main, note, y + 18, 0.55, ORANGE, 1)
+        return self._wait_for_choice(main, buttons)
 
-        self._mouse_events.clear()   # ignore clicks made during playback
-        armed = None                 # button the mouse was pressed on, if any
-        while True:
-            main = base.copy()
-            for b in buttons:
-                if b is armed and b.contains(self._mouse_pos):
-                    state = "pressed"
-                elif armed is None and b.contains(self._mouse_pos):
-                    state = "hover"
-                else:
-                    state = "normal"
-                b.draw(main, state)
-
-            key = self._show(main, 20)
-            if key in _REVIEW_KEYS:
-                return _REVIEW_KEYS[key]
-            while self._mouse_events:
-                kind, pt = self._mouse_events.popleft()
-                if kind == "down":
-                    armed = next((b for b in buttons if b.contains(pt)), None)
-                elif kind == "up":
-                    if armed is not None and armed.contains(pt):
-                        return armed.value
-                    armed = None
-
-    def pick_endpoints(self, frame, header, reason=None, previous=None):
+    def pick_endpoints(self, frame, reason=None, previous=None):
         """
         Let the user click the rope endpoints on `frame`: first the far endpoint
-        (start of the walk), then the near endpoint (finish line). Backspace or U
-        undoes the last click, Enter confirms, Esc cancels.
+        (start of the walk), then the near endpoint (finish line). Buttons: Undo
+        and Cancel while clicking; Redo, Confirm and Cancel once both are placed.
 
         Args:
             frame: the video's first frame (the endpoints are in its pixels).
-            header: line shown at the top, e.g. the file name.
             reason: optional line explaining why clicks are needed.
             previous: optional (far, near) currently in use, drawn faintly.
 
         Returns:
             ((far_x, far_y), (near_x, near_y)) in frame pixels, or None if cancelled.
         """
-        base, scale, ox, oy = _fit(frame, MAIN_W, MAIN_H)
+        base, scale, ox, oy = _frame_screen(frame, top=HEADER_H)
         fh, fw = frame.shape[:2]
 
         def to_screen(p):
@@ -377,9 +465,10 @@ class LabelerUI:
 
         prompts = ["Click the FAR endpoint (start of the walk)",
                    "Click the NEAR endpoint (finish line)",
-                   "Enter = confirm"]
+                   "Check the line, then Confirm or Redo"]
+        cancel = ("Cancel", "cancel", (KEY_ESC,))
         points = []
-        self._mouse_events.clear()
+        self._new_screen()
         while True:
             main = base.copy()
             if previous is not None:
@@ -389,29 +478,32 @@ class LabelerUI:
                 cv2.line(main, to_screen(points[0]), to_screen(points[1]), YELLOW, 2)
             for p, color in zip(points, (BLUE, RED)):
                 cv2.circle(main, to_screen(p), 7, color, -1)
-
-            cv2.rectangle(main, (0, 0), (MAIN_W, 100 if reason else 76), (0, 0, 0), -1)
-            cv2.putText(main, header, (12, 24), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
-            y = 52
+            y = 32
             if reason:
-                cv2.putText(main, reason, (12, y), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
-                y += 24
-            cv2.putText(main, prompts[len(points)], (12, y), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
-            _put_centered(main, "Backspace / U = undo      Esc = cancel", MAIN_H - 16, 0.45, GREY, 1)
+                cv2.putText(main, reason, (16, y), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
+                y += 30
+            cv2.putText(main, prompts[len(points)], (16, y), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
 
-            key = self._show(main, 30)
-            while self._mouse_events:
-                kind, (cx, cy) = self._mouse_events.popleft()
-                fx, fy = (cx - ox) / scale, (cy - oy) / scale
-                if (kind == "down" and len(points) < 2 and cx < MAIN_W
-                        and 0 <= fx < fw and 0 <= fy < fh):
-                    points.append((int(round(fx)), int(round(fy))))
-            if key == KEY_ESC:
+            if len(points) == 2:
+                specs = [("Redo", "redo", ()), ("Confirm", "confirm", KEY_ENTER), cancel]
+            elif points:
+                specs = [("Undo", "undo", KEY_BACKSPACE), cancel]
+            else:
+                specs = [cancel]
+            value, _, clicks = self._interact(main, _bar_buttons(specs), 30)
+
+            if value == "cancel":
                 return None
-            if (key in KEY_BACKSPACE or key in (ord("u"), ord("U"))) and points:
-                points.pop()
-            if key in KEY_ENTER and len(points) == 2:
+            if value == "confirm":
                 return points[0], points[1]
+            if value == "redo":
+                points = []
+            elif value == "undo":
+                points.pop()
+            for cx, cy in clicks:
+                fx, fy = (cx - ox) / scale, (cy - oy) / scale
+                if len(points) < 2 and cx < MAIN_W and 0 <= fx < fw and 0 <= fy < fh:
+                    points.append((int(round(fx)), int(round(fy))))
 
     def close(self):
         cv2.destroyWindow(WINDOW)

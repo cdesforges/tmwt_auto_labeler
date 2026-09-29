@@ -104,30 +104,32 @@ matte cropping existed. Pass `--no_content_crop` to see the full recorded frame.
 ## How a run works
 
 A run processes every video in `--input_dir` in three phases, all in one window.
-Its right-hand sidebar lists every file, colour-coded: **white** waiting,
-**yellow** being analysed / reviewed / saved, **green** done, **orange** needs
-your input at review, **red** failed or rejected.
+Every choice is an on-screen button: a click counts when the mouse is released
+over the same button it was pressed on. Most buttons also have a keyboard
+shortcut, shown on the button. The right-hand sidebar lists every file,
+colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
+**green** done, **orange** needs your input at review, **red** failed or rejected.
 
 1. **Analyse (unattended).** Each video in turn: find the rope endpoints, run
    pose estimation and ground tracking over every frame, and detect the walk
    start and end. The window shows `Analysing <file> (n of N)` with a progress
-   bar. Nothing asks for input here, so the whole batch can run unattended.
+   bar and a **Cancel** button. Nothing asks for input here, so the whole batch
+   can run unattended. When every video is done, an **Analysis complete**
+   screen summarises what was found, with **Start review** and **Save all
+   without reviewing**.
 2. **Review.** Each video is played back in real time with its detection
-   overlaid, then pauses and asks whether the detection was successful. Click
-   an option's button (a click counts when released over the same button), or
-   press its key:
+   overlaid, with **Pause / Resume** and **Skip to review** buttons below it.
+   It then asks whether the detection was successful:
 
-   | Key | Choice | What happens |
-   |---|---|---|
-   | `1` / Enter | Looks good | Outputs are saved and the video is marked approved. |
-   | `2` | Rope endpoints inaccurate | Click the far (start) and near (finish) endpoints on the first frame, in the same window (Backspace undoes a click, Enter confirms, Esc cancels). Timing is recomputed from the cached analysis and the video replays. |
-   | `3` | Walk start/stop inaccurate | The video replays in real time. Press Space when the walk starts and again when it ends. |
-   | `4` | Body not detected | The file is skipped: no outputs are written, and it's reported as rejected. |
-   | `R` | Replay | Play the video again. |
-   | Esc | Quit review | The remaining videos are saved with their automatic results, marked unreviewed. |
+   | Button (key) | What happens |
+   |---|---|
+   | Looks good (`1` / Enter) | Outputs are saved and the video is marked approved. |
+   | Rope endpoints inaccurate (`2`) | Click the far (start) and near (finish) endpoints on the first frame, then **Confirm**, **Redo** or **Cancel**. Timing is recomputed from the cached analysis and the video replays. |
+   | Walk start/stop inaccurate (`3`) | The video replays in real time. Click **Mark start** when the walk starts and **Mark stop** when it ends (Space also works). The mark uses the frame on screen when the button was pressed. |
+   | Body not detected (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
+   | Replay (`R`) | Play the video again. |
+   | Quit review (Esc) | The remaining videos are saved with their automatic results, marked unreviewed. |
 
-   During playback, Space pauses and Enter skips to the prompt. In manual timing,
-   Space marks the start and stop, and P pauses.
 3. **Report.** `labeling_report.csv` and `labeling_report.md` summarise every
    video (see [Output](#output)).
 

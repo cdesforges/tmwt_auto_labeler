@@ -33,8 +33,8 @@ import pose_common
 import review
 from job import (REVIEW_REJECTED, STATUS_FAILED, STATUS_INCOMPLETE,
                  STATUS_NEEDS_INPUT, STATUS_OK, VideoJob)
-from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ESC, NEEDS_INPUT, RED,
-                        UNREVIEWED, WHITE, WORKING, LabelerUI)
+from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ENTER, KEY_ESC, NEEDS_INPUT,
+                        ORANGE, RED, UNREVIEWED, WHITE, WORKING, LabelerUI)
 from pose_backend import BACKENDS, get_backend
 import report
 
@@ -74,7 +74,7 @@ def run_analysis(jobs, ui, model_path, backend, matte_crop):
         if ui is not None:
             ui.active = i
             ui.set_state(i, WORKING, "starting...")
-            ui.show_progress(title, subtitle, 0.0, force=True)
+            ui.show_progress(title, subtitle, 0.0, force=True, cancellable=True)
         try:
             analysis.analyze_job(job, model_path, backend, matte_crop,
                                  _progress_callback(ui, i, title, subtitle))
@@ -113,7 +113,7 @@ def _progress_callback(ui, i, title, subtitle):
             if pose is not None:
                 pose_common.draw_pose(img, pose)
             return img
-        if ui.show_progress(title, subtitle, fraction, preview) == KEY_ESC:
+        if ui.show_progress(title, subtitle, fraction, preview, cancellable=True):
             raise QuitRequested()
     return window
 
@@ -131,12 +131,31 @@ def _analysis_state(job):
 
 # --- Phases 2 and 3 ------------------------------------------------------------
 
+def ask_to_review(ui, jobs):
+    """
+    "Analysis complete" screen with what was found. Returns True if the user
+    chose to review, False to save everything without reviewing.
+    """
+    ui.active = None
+    counts = [
+        (sum(j.status == STATUS_OK for j in jobs), "timed automatically", GREEN),
+        (sum(j.status == STATUS_NEEDS_INPUT for j in jobs), "need rope endpoints clicked", ORANGE),
+        (sum(j.status == STATUS_INCOMPLETE for j in jobs), "with incomplete timing", RED),
+        (sum(j.status == STATUS_FAILED for j in jobs), "failed", RED),
+    ]
+    lines = [("Analysis complete", GREEN), (f"{len(jobs)} video(s) analysed", WHITE)]
+    lines += [(f"{count} {text}", color) for count, text, color in counts if count]
+    choice = ui.show_message(lines, [("Start review", "review", KEY_ENTER),
+                                     ("Save all without reviewing", "skip", ())])
+    return choice == "review"
+
+
 def run_review(jobs, ui):
     """Review every job that has something to review, until the user quits."""
     for i, job in enumerate(jobs):
         if job.status == STATUS_FAILED:
             continue
-        if review.review_job(job, ui, i, len(jobs)) == review.QUIT:
+        if review.review_job(job, ui, i) == review.QUIT:
             print("  Review stopped by user.")
             return
 
@@ -165,8 +184,8 @@ def show_summary(ui, jobs, report_path):
         [("All done", GREEN)]
         + [(f"{result}: {count}", RED if result in (report.REJECTED, report.FAILED) else WHITE)
            for result, count in counts.items()]
-        + [(f"Report: {os.path.basename(report_path)} in the output folder", GREY),
-           ("Press any key to close.", GREY)])
+        + [(f"Report: {os.path.basename(report_path)} in the output folder", GREY)],
+        [("Close", "close", KEY_ENTER + (KEY_ESC,))])
 
 
 # --- CLI -----------------------------------------------------------------------
@@ -216,7 +235,7 @@ def main():
     jobs = make_jobs(videos, output_dir)
     ui = None if args.no_display else LabelerUI([job.name for job in jobs])
     cancelled = run_analysis(jobs, ui, model_path, backend, not args.no_matte_crop)
-    if ui is not None and not cancelled:
+    if ui is not None and not cancelled and ask_to_review(ui, jobs):
         run_review(jobs, ui)
     save_unreviewed(jobs, ui)
     report_path, _ = report.write_report(jobs, output_dir, args.backend)
