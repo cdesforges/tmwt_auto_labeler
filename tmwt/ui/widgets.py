@@ -306,9 +306,9 @@ def button_row(specs, y):
 # Icons, drawn with shapes (the font has no symbols): media-player controls,
 # the walk start / stop marks (a green / red dot, as on the seek bar), jumping to
 # the previous / next flagged pose frame (an arrow and an orange dot), and close
-# (an X) and save (a floppy disk) for the top bar.
+# (an X) and save (a floppy disk) for the top bar, and a menu (three lines).
 ICONS = ("play", "pause", "prev_frame", "next_frame", "prev_video", "next_video",
-         "mark_start", "mark_stop", "prev_flag", "next_flag", "close", "save")
+         "mark_start", "mark_stop", "prev_flag", "next_flag", "menu", "close", "save")
 _ICON_BTN_W = 72
 
 
@@ -353,6 +353,9 @@ def draw_icon(img, icon, center, size=11, color=WHITE):
         facing = -1 if icon == "prev_flag" else 1
         triangle(cx + facing * 2 * s, facing)
         cv2.circle(img, (cx - facing * int(0.8 * s), cy), int(0.55 * s), ORANGE, -1, cv2.LINE_AA)
+    elif icon == "menu":                            # ☰
+        for dy in (-int(0.7 * s), 0, int(0.7 * s)):
+            cv2.rectangle(img, (cx - s, cy + dy - 1), (cx + s, cy + dy + 1), color, -1)
     elif icon == "close":                           # X
         d = int(0.75 * s)
         cv2.line(img, (cx - d, cy - d), (cx + d, cy + d), color, 2, cv2.LINE_AA)

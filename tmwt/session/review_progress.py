@@ -1,12 +1,14 @@
 """
-Review progress: the state of an unfinished review, saved as it goes so it can
-be continued later.
+Review progress: the state of a review, saved as it goes so it can be
+continued, or changed after its results were saved.
 
 Saved to <videos folder>/tmwt_analysis/review_progress.json after every review
-decision, whenever the user switches video, and when the review stops (quit,
-exit without saving, or the window closed). It's deleted once the outputs have
-been saved. On the next review of the folder the user is asked whether to
-continue from it or start over.
+decision, whenever the user switches video, when the review stops (save and
+quit, or the window closed), and after the outputs are saved (recording when,
+and which videos were saved). It's kept after saving, so the next review of
+the folder can go back and change things and save again. "Quit without saving"
+puts the file back as it was when the review began (snapshot / put_back); only
+"Start over" deletes it.
 
 For each video it keeps what the review can change: the decision, the
 endpoints, the chosen person and the timing (including manual timing, which
@@ -38,8 +40,13 @@ def _point(p):
     return [int(p[0]), int(p[1])] if p is not None else None
 
 
-def save(jobs, last_index):
-    """Write the review state of every job; `last_index` is the video worked on last."""
+def save(jobs, last_index, outputs_saved=False):
+    """
+    Write the review state of every job; `last_index` is the video worked on
+    last. With outputs_saved (just after saving the outputs), record when; the
+    time of an earlier save is otherwise carried over.
+    """
+    previous = _read(progress_path(jobs)) or {}
     videos = {}
     for job in jobs:
         if job.status == STATUS_FAILED:
@@ -65,9 +72,12 @@ def save(jobs, last_index):
             # back from the analysis file).
             "pose_edits": [[e.frame, e.landmark, e.smoothed.x, e.smoothed.y, e.smoothed.z]
                            for e in job.pose_edits],
+            "saved": job.saved,
         }
     data = {"format_version": FORMAT_VERSION,
             "saved": datetime.now().isoformat(timespec="minutes"),
+            "outputs_saved": (datetime.now().isoformat(timespec="minutes") if outputs_saved
+                              else previous.get("outputs_saved")),
             "last": jobs[last_index].name if last_index is not None else None,
             "videos": videos}
     path = progress_path(jobs)
@@ -84,15 +94,8 @@ def load(jobs):
     (no file, another format, or no video decided yet). Entries for videos that
     were replaced or re-processed since are dropped.
     """
-    path = progress_path(jobs)
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return None
-    if data.get("format_version") != FORMAT_VERSION:
+    data = _read(progress_path(jobs))
+    if data is None or data.get("format_version") != FORMAT_VERSION:
         return None
     current = {job.name: job for job in jobs if job.status != STATUS_FAILED}
     data["videos"] = {
@@ -103,6 +106,36 @@ def load(jobs):
     if not any(e["review"] != REVIEW_UNREVIEWED for e in data["videos"].values()):
         return None
     return data
+
+
+def _read(path):
+    """The progress file's contents, or None if it's missing or unreadable."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def snapshot(jobs):
+    """The progress file as it is now (its text, or None if there's none), for put_back."""
+    path = progress_path(jobs)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return f.read()
+
+
+def put_back(jobs, snap):
+    """Restore the progress file to a snapshot (deleting it if there was none)."""
+    path = progress_path(jobs)
+    if snap is None:
+        clear(jobs)
+        return
+    with open(path, "w") as f:
+        f.write(snap)
 
 
 def counts(progress):
@@ -155,11 +188,12 @@ def restore(jobs, progress):
         job.pose_confirmed = entry.get("pose_confirmed", False)
         _restore_pose_edits(job, entry.get("pose_edits") or [])
         job.review, job.review_note = entry["review"], entry["review_note"]
+        job.saved = entry.get("saved", False)
     return last
 
 
 def clear(jobs):
-    """Delete the saved progress (after saving the outputs, or on Start over)."""
+    """Delete the saved progress (on Start over)."""
     path = progress_path(jobs)
     if os.path.exists(path):
         os.remove(path)

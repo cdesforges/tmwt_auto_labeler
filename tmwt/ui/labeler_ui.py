@@ -53,19 +53,8 @@ from tmwt.ui.window import Window
 WINDOW = "TMWT Labeler"
 CANVAS_W, CANVAS_H = MAIN_W + SIDEBAR_W, TOPBAR_H + MAIN_H
 
-# Review prompt options: (shortcut label, text, value, keys).
-REVIEW_OPTIONS = [
-    ("1", "Looks good", "approve", (ord("1"),) + KEY_ENTER),
-    ("2", "Rope endpoints inaccurate (re-click them)", "endpoints", (ord("2"),)),
-    ("3", "Walk start/stop inaccurate (time it manually)", "timing", (ord("3"),)),
-    ("4", "Skip this file", "skip", (ord("4"),)),
-    ("R", "Replay", "replay", (ord("r"), ord("R"))),
-    ("F", "Finish review (save results)", "quit", (ord("f"), ord("F"))),
-]
-# Offered on the review prompt only when more than one person was tracked.
-WRONG_PERSON_OPTION = ("5", "Wrong person tracked (pick the walker)", "person", (ord("5"),))
-# Offered only when the pose check flagged points (see session/review.py).
-FLAGGED_OPTION = ("6", "Review flagged points (orange)", "flags", (ord("6"),))
+# Menu options (ask_menu) are (shortcut label, text, value, keys); the review's
+# are built in session/review.py.
 
 # Colours for telling people apart on the "pick the walker" screen.
 PERSON_COLORS = [(0, 255, 0), (255, 160, 0), (255, 0, 255), (0, 200, 255), (60, 60, 255)]
@@ -423,7 +412,8 @@ class LabelerUI:
             put_centered(main, text, y, 0.55, GREY, 1)
         self._show(main, 1)
 
-    def show_frame(self, img, wait_ms, specs, label=None, hotkeys=None, seek=None, alert=None):
+    def show_frame(self, img, wait_ms, specs, label=None, hotkeys=None, seek=None, alert=None,
+                   notice=None):
         """
         One playback frame above a bar of buttons, shown for up to wait_ms.
 
@@ -434,6 +424,8 @@ class LabelerUI:
             seek: optional seek_bar.SeekState, to show a seek bar above the
                 buttons.
             alert: optional error text, in red, centred above the seek bar.
+            notice: optional information in orange, in the same place (an
+                alert takes its place).
 
         Returns:
             (value, pressed_at): the chosen button's value or None, and when it
@@ -447,9 +439,10 @@ class LabelerUI:
         main, _, _, _ = frame_screen(img, bottom=bottom)
         if label:
             draw_badge(main, label, (12, 12), YELLOW)
-        if alert:
-            draw_badge(main, alert, (MAIN_W // 2, MAIN_H - bottom - 46), RED, scale=0.6,
-                       thickness=2, center=True)
+        if alert or notice:
+            draw_badge(main, alert or notice, (MAIN_W // 2, MAIN_H - bottom - 46),
+                       RED if alert else ORANGE, scale=0.6 if alert else 0.5,
+                       thickness=2 if alert else 1, center=True)
         if seek:
             mouse = self._mouse(self.main)
             drag_fraction = self.seek_bar.fraction_at(mouse[0]) if self._drag and mouse else None
@@ -489,23 +482,18 @@ class LabelerUI:
                                    background=background, dim=0.2)
         return choice == "yes"
 
-    def ask_review(self, background, summary_lines, note=None, wrong_person=False, flagged=False):
+    def ask_menu(self, background, title, lines, options, note=None):
         """
-        The review prompt over the last frame: the detection summary and one
-        button per option in REVIEW_OPTIONS, plus WRONG_PERSON_OPTION if
-        `wrong_person` and FLAGGED_OPTION if `flagged`. Returns the chosen
+        A menu over a dimmed frame: `title`, some grey `lines`, and one
+        full-width button per option, (shortcut label, text, value, keys), with
+        its shortcut at the left; `note` in orange below. Returns the chosen
         option's value.
         """
-        options = list(REVIEW_OPTIONS)
-        if wrong_person:
-            options.insert(-2, WRONG_PERSON_OPTION)   # before Replay and Finish
-        if flagged:
-            options.insert(-2, FLAGGED_OPTION)
         main = dimmed(background, _DIM_PROMPT)
-        y = 110 - 10 * (wrong_person + flagged)
-        put_centered(main, "Was the detection successful?", y, 0.9, WHITE, 2)
+        y = 120 - 12 * max(0, len(options) - 5)
+        put_centered(main, title, y, 0.9, WHITE, 2)
         y += 40
-        for text in summary_lines:
+        for text in lines:
             put_centered(main, text, y, 0.55, GREY, 1)
             y += 26
         y += 16

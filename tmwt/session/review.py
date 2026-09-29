@@ -1,36 +1,43 @@
 """
 Phase 2 of a run: review each analysed video with the user.
 
-Each video plays back in real time with its detection drawn on, then pauses on
-a prompt (LabelerUI.ask_review):
-  - Looks good               -> approved (outputs are written after review)
-  - Rope endpoints inaccurate -> re-place the endpoints; timing is recomputed
-                                from the cached analysis and the video replays
-  - Walk start/stop inaccurate -> replay from scratch, marking the start and stop
-  - Wrong person tracked     -> (only with several people) click the walker;
-                                timing is recomputed and the video replays
-  - Skip this file           -> the file is rejected; nothing is saved
+Each video plays back (playback) with its detection drawn on: a seek bar with
+the walk's start and stop marks (drag their tabs to move them), the mark
+buttons (green dot: walk start, red dot: walk stop, M presses them in turn),
+frame-step and play buttons, then:
+
+  - Confirm (Enter) -> the final confirmation screen (_final_confirm): what
+    will be saved, with Next video (the video is approved and the next one
+    starts) or Go back (to the playback, where it was).
+  - ☰ (Esc)         -> the menu (_menu):
+        Change rope endpoints        re-place them; timing is recomputed and
+                                     the video replays
+        Mark this file to be skipped rejected; nothing is saved
+        Review flagged points        (only with flagged pose points)
+        Wrong person tracked         (only with several people) click the walker
+        Back to review               back to the playback
+        Finish all (save all results) go to "Review complete"
+
+Marks changed in the playback replace the automatic timing (it becomes
+manual). The video doesn't end the playback: it pauses on the last frame.
+
 A video in which nobody was detected at all only offers "Skip this file".
-
-If the pose check (pose_check.py) flagged points the heavier model couldn't
-fix, opening the video shows a full-screen notice about them, then goes into
-flagged-points mode (review_flagged_points): paused on
-the first flagged frame, with buttons to jump between flagged frames, Smooth
-points / Unsmooth (pose_smoothing.py; smoothed points turn yellow) and
-Confirm, which goes on to the timing playback. "Review flagged points" on the
-review prompt goes back to it. Flagged points are drawn in orange everywhere
-and left out of the timing until smoothed; "Skip this file" with unconfirmed
-flags records "pose detection anomalies" as the reason.
-
-Every playback has a seek bar, frame-step buttons and the mark buttons (green
-dot: walk start, red dot: walk stop), and the marks can be dragged along the
-seek bar, so the timing can be corrected during the first playback too. Marks
-changed there replace the automatic timing (it becomes manual).
 Videos whose endpoints couldn't be found automatically ask for clicks first,
 with the start point pre-placed where the subject was detected standing. If new
 endpoints don't give a complete timing, the user is asked straight away to redo
-them, time the video manually, or skip it.
+them, mark the timing in the playback, or skip the video.
+
+If the pose check (pose_check.py) flagged points the heavier model couldn't
+fix, opening the video shows a full-screen notice about them, then goes into
+flagged-points mode (review_flagged_points): paused on the first flagged
+frame, with buttons to jump between flagged frames, Smooth points / Unsmooth
+(pose_smoothing.py; smoothed points turn yellow) and Confirm, which goes on to
+the playback. Flagged points are drawn in orange everywhere and left out of
+the timing until smoothed; skipping a video with unconfirmed flags records
+"pose detection anomalies" as the reason.
 """
+
+from collections import namedtuple
 
 import cv2
 
@@ -48,8 +55,7 @@ from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE
 # to continue later is the top bar's job: see labeler_ui.SaveAndQuit.)
 QUIT = "quit"
 # Outcomes of setting endpoints (_set_endpoints).
-_REPLAY = "replay"        # complete timing found: play the video with it
-_PROMPT = "prompt"        # back to the review prompt without replaying
+_REPLAY = "replay"        # endpoints set: play the video from the start
 _CANCELLED = "cancelled"  # the user cancelled endpoint picking
 _SKIP = "skip"            # the user chose to skip the file
 # Marks: M marks the start, then the stop, then the start again, and so on (the
@@ -58,13 +64,20 @@ _MARK_KEYS = (ord("m"), ord("M"))
 _STOP_BEFORE_START = "Stop is before start: mark or drag them again"
 # Seek bar ids of the two marks, and the playback values that set them.
 _MARKS = {"start": "mark_start", "stop": "mark_stop"}
+# The playback's own buttons, right of the transport controls.
+_CONFIRM = ("Confirm (Enter)", "confirm", KEY_ENTER)
+_MENU = ("Menu (Esc)", "menu", (KEY_ESC,), "menu")
+
+# How the playback ended: "confirm" or "menu"; the marks then (start, stop);
+# the last annotated frame shown (or None); and the frame index it was on.
+PlaybackResult = namedtuple("PlaybackResult", "value start end last k")
 
 
 def review_job(job, ui, i):
     """
-    Review one analysed job (index i in the batch) in the window: play it back
-    (with its current timing, so a video reviewed before shows what was
-    decided), then ask about it.
+    Review one analysed job (index i in the batch) in the window (see the
+    module docs). A video reviewed before plays back with the timing it was
+    given.
 
     Returns:
         QUIT (finish the review now), or None once this video is decided.
@@ -81,70 +94,107 @@ def review_job(job, ui, i):
         _reject(job, ui, i, "no body detected")
         return None
 
-    note = None
-    replay = True
     if job.pose_flags:
         _alert_pose_flags(job, ui)
         review_flagged_points(job, ui)
+
+    note = None
     if job.far_ep is None or job.near_ep is None:
         reason = f"{job.name}: automatic detection failed ({job.endpoint_problem})"
         outcome, note = _set_endpoints(job, ui, reason)
-        if outcome == _CANCELLED:
-            # Back to the options, where the user can retry, time it, or skip it.
-            note = "Rope endpoints not set: set them (2), time it manually (3), or skip it (4)."
-        elif outcome == _SKIP:
+        if outcome == _SKIP:
             _reject(job, ui, i, "no walk timing found")
             return None
-        replay = outcome == _REPLAY
+        if outcome == _CANCELLED:
+            note = "Rope endpoints not set: use the menu (Esc) to set them, or to skip the video"
 
-    several_people = people.people_on_screen(job)[0] is not None
-    last_frame = job.info.first_frame
+    k = None            # where the playback resumes; None = from the start
     while True:
-        if replay:
-            start, end, frame = playback(job, ui)
-            last_frame = frame if frame is not None else last_frame
-            if (start, end) != (job.walk_start, job.walk_end):
-                note = _apply_marks(job, start, end, "marked during review")
-        replay = True
+        result = playback(job, ui, start_k=k, notice=note)
+        k, note = result.k, None
+        if (result.start, result.end) != (job.walk_start, job.walk_end):
+            note = _apply_marks(job, result.start, result.end, "marked during review")
 
-        if note is None and job.timing_source == "auto" and job.timing_note:
-            note = job.timing_note   # the automatic start is uncertain or missing
-        choice = ui.ask_review(last_frame, summary_lines(job), note, wrong_person=several_people,
-                               flagged=bool(job.pose_flags))
-        note = None
-        if choice == "approve":
-            if job.duration is None:
-                note = "Timing is incomplete: time it manually (3), or skip the file (4)."
-                replay = False
-                continue
+        if result.value == "confirm":
+            if note:
+                continue   # the new marks aren't a walk: back to the playback with why
             if job.pose_flags and not job.pose_confirmed:
-                # e.g. after changing the subject: check their flagged points first.
-                review_flagged_points(job, ui)
+                review_flagged_points(job, ui)   # e.g. after changing the subject
                 continue
-            job.review = REVIEW_APPROVED
-            ui.set_state(i, DONE, f"approved  {job.duration:.2f}s")
-            ui.mark_reviewed(i, APPROVED_MARK)
-            return None
+            decision = _final_confirm(job, ui, result.last)
+            if decision == "next":
+                job.review, job.saved = REVIEW_APPROVED, False   # saved again with the next save
+                ui.set_state(i, DONE, f"approved  {job.duration:.2f}s")
+                ui.mark_reviewed(i, APPROVED_MARK)
+                return None
+            if decision == "skip":
+                _reject(job, ui, i, _skip_reason(job))
+                return None
+            continue   # "back": the playback, where it was
+
+        choice = _menu(job, ui, result.last, note)
+        note = None
         if choice == "endpoints":
             outcome, note = _set_endpoints(job, ui)
             if outcome == _SKIP:
                 _reject(job, ui, i, "no walk timing found")
                 return None
-            replay = outcome == _REPLAY
-        elif choice == "person":
-            replay = _pick_subject(job, ui)
-        elif choice == "flags":
-            review_flagged_points(job, ui)   # then on to the timing playback
-        elif choice == "timing":
-            note = _time_manually(job, ui, last_frame)
-            replay = False
+            if outcome == _REPLAY:
+                k = None
         elif choice == "skip":
-            unconfirmed = job.pose_flags and not job.pose_confirmed
-            _reject(job, ui, i, "pose detection anomalies" if unconfirmed else "skipped at review")
+            _reject(job, ui, i, _skip_reason(job))
             return None
+        elif choice == "flags":
+            review_flagged_points(job, ui)
+        elif choice == "person":
+            if _pick_subject(job, ui):
+                k = None
         elif choice == "quit":
             return QUIT
-        # "replay" loops round and plays again.
+        # "back": the playback, where it was.
+
+
+def _skip_reason(job):
+    """Why a skipped video was rejected, for the report."""
+    return "pose detection anomalies" if job.pose_flags and not job.pose_confirmed else "skipped at review"
+
+
+def _menu(job, ui, background, note=None):
+    """The playback's menu (see the module docs). Returns the chosen option's value."""
+    options = [("1", "Change rope endpoints", "endpoints", (ord("1"),)),
+               ("2", "Mark this file to be skipped", "skip", (ord("2"),))]
+    if job.pose_flags:
+        options.append(("3", "Review flagged points (orange)", "flags", (ord("3"),)))
+    if people.people_on_screen(job)[0] is not None:
+        options.append(("4", "Wrong person tracked (pick the walker)", "person", (ord("4"),)))
+    options += [("Esc", "Back to review", "back", (KEY_ESC,)),
+                ("F", "Finish all (save all results)", "quit", (ord("f"), ord("F")))]
+    return ui.ask_menu(background, "Menu", summary_lines(job), options, note)
+
+
+def _final_confirm(job, ui, background):
+    """
+    The final confirmation screen: what will be saved for this video.
+
+    Returns:
+        "next" (approve it and go on), "back" (to the playback), or "skip"
+        (only offered when the timing is incomplete).
+    """
+    lines = [(text, GREY) for text in summary_lines(job)]
+    if job.pose_flags:
+        smoothed = f", {len(job.pose_edits)} smoothed" if job.pose_edits else ""
+        lines.append((f"Flagged pose points checked ({job.pose_flagged_frames} frame(s){smoothed}).", GREY))
+    if job.timing_source == "auto" and job.timing_note:
+        lines.append((job.timing_note, ORANGE))
+    if job.duration is None:
+        return ui.show_message(
+            [("Timing incomplete", ORANGE)] + lines
+            + [("Mark the walk start and stop (green and red dots), or skip this video.", GREY)],
+            [("Go back", "back", KEY_ENTER + (KEY_ESC,)), ("Skip this file", "skip", ())],
+            background=background)
+    return ui.show_message([("Confirm this video?", WHITE)] + lines,
+                           [("Next video", "next", KEY_ENTER), ("Go back", "back", (KEY_ESC,))],
+                           background=background)
 
 
 def _alert_pose_flags(job, ui):
@@ -248,25 +298,6 @@ def _retime(job):
         timing.update_timing(job)
 
 
-def _time_manually(job, ui, background):
-    """
-    Replay the video for the user to mark the start and stop. Updates the job's
-    timing if both were marked. Returns a note for the review prompt, or None.
-    """
-    choice = ui.show_message([
-        ("Manual timing", WHITE),
-        ("The video will replay in real time, with no marks yet.", GREY),
-        ("Click the green dot when the walk starts and the red dot when it ends.", GREY),
-        ("Click either again, or drag its tab on the seek bar, to move it.", GREY),
-        ("M marks start / stop in turn; Space plays and pauses.", GREY),
-    ], [("Start manual timing", "start", KEY_ENTER), ("Cancel", "cancel", (KEY_ESC,))],
-        background=background)
-    if choice == "cancel":
-        return None
-    start, end, _ = playback(job, ui, manual_timing=True)
-    return _apply_marks(job, start, end, "marked during replay")
-
-
 def _apply_marks(job, start, end, detail):
     """
     Make the user's marks the job's timing (manual), if they make a walk.
@@ -282,37 +313,38 @@ def _apply_marks(job, start, end, detail):
     return None
 
 
-def playback(job, ui, manual_timing=False):
+def playback(job, ui, start_k=None, notice=None):
     """
-    Play the job back in real time with its detection drawn on. Below the
-    picture: a seek bar (drag or click to scrub), then the mark buttons (green
-    dot: walk start, red dot: walk stop), frame-back / play-pause /
-    frame-forward (player.py), and Skip to review (Done, in manual timing).
+    Play the job back in real time with its detection drawn on (see the module
+    docs): the seek bar and marks, mark buttons, frame-back / play-pause /
+    frame-forward (player.py), Confirm and the menu button. Plays until
+    Confirm or the menu is chosen; the video pauses on its last frame.
 
-    The walk's start and stop are marked on the seek bar, and can be moved by
-    clicking a mark button (the frame on screen when it was pressed) or by
-    dragging a mark's tab along the seek bar; M presses the mark buttons in
-    turn (start, stop, start, ...). Changed marks are shown in a badge at the
-    top left, and a stop before the start as an error until it's fixed.
+    The walk's start and stop can be moved by clicking a mark button (the frame
+    on screen when it was pressed) or by dragging a mark's tab along the seek
+    bar. Changed marks are shown in a badge at the top left, and a stop before
+    the start as an error until it's fixed (Confirm waits for that).
 
-    With manual_timing, playback starts with no marks.
+    Args:
+        start_k: frame to resume at, paused (e.g. after the menu); None plays
+            from the start.
+        notice: text to show in orange above the seek bar (e.g. why the last
+            action didn't work); the job's timing note is shown otherwise.
 
     Frames come from a video_io.FrameSource, so scrubbing and stepping back show
     exactly the frames the analysis used.
 
     Returns:
-        (start, end, last_frame): the marks when playback ended (the job's own
-        timing if they weren't changed), and the last annotated frame shown
-        (or None). The job itself isn't changed.
+        A PlaybackResult. The marks are the job's own timing if they weren't
+        changed; the job itself isn't changed.
     """
-    if manual_timing:
-        marks = {"start": None, "stop": None}
-        waiting = annotate.WAITING_MANUAL
-    else:
-        marks = {"start": job.walk_start, "stop": job.walk_end}
-        waiting = annotate.WAITING_AUTO
+    marks = {"start": job.walk_start, "stop": job.walk_end}
     original = dict(marks)
     player = Player([f.time_s for f in job.frames], highlights=_pose_highlights(job))
+    if start_k is not None:
+        player.k, player.paused = start_k, True
+    if notice is None and job.timing_source == "auto" and job.timing_note:
+        notice = job.timing_note
     source = video_io.FrameSource(job)
     m_next = "start"   # which mark M sets next
     ui.start_playback()
@@ -326,34 +358,35 @@ def playback(job, ui, manual_timing=False):
             backwards = start is not None and end is not None and end <= start
             # A stop before the start isn't a walk: don't draw it as finished.
             last, _ = annotate.render_frame(frame, job.frames[player.k], start,
-                                            None if backwards else end, waiting,
+                                            None if backwards else end,
                                             model_strength=job.model_strength)
             specs = ([_mark_button(which, m_next) for which in _MARKS] + player.transport()
-                     + [("Done (Enter)" if manual_timing else "Skip to review (Enter)", "skip", KEY_ENTER)])
+                     + [_CONFIRM, _MENU])
             label = None
-            if manual_timing or marks != original:
-                label = (f"{'MANUAL' if manual_timing else 'EDITED'}  start {_mark_text(start)}"
-                         f"  stop {_mark_text(end)}  (M: {m_next})")
+            if marks != original:
+                label = f"EDITED  start {_mark_text(start)}  stop {_mark_text(end)}  (M: {m_next})"
             value, pressed_at = player.show(
                 ui, last, specs, label, marks=[(start, GREEN, "start"), (end, RED, "stop")],
-                alert=_STOP_BEFORE_START if backwards else None)
+                alert=_STOP_BEFORE_START if backwards else None, notice=notice)
 
-            if value == "skip":
-                break
+            if value == "menu" or (value == "confirm" and not backwards):
+                return PlaybackResult(value, marks["start"], marks["stop"], last, player.k)
             if value in _MARKS.values():
                 which = "start" if value == "mark_start" else "stop"
                 marks[which] = player.time_on_screen(pressed_at)
                 m_next = "stop" if which == "start" else "start"
+                notice = None
                 print(f"  Walk {which} marked at {marks[which]:.3f}s")
             elif isinstance(value, tuple) and value[0] == "mark":
                 _, which, t = value
                 marks[which] = t
+                notice = None
                 print(f"  Walk {which} dragged to {t:.3f}s")
             if not player.advance():
-                break
+                player.paused = True   # stay on the last frame
     finally:
         source.close()
-    return marks["start"], marks["stop"], last
+    return PlaybackResult("menu", marks["start"], marks["stop"], last, player.k)
 
 
 def _mark_button(which, m_next):
@@ -388,11 +421,11 @@ def _set_endpoints(job, ui, reason=None):
     Let the user (re)place the endpoints, with the start point pre-placed at the
     current start (or where the subject was detected standing), then recompute
     the timing. If that timing is incomplete, ask straight away whether to redo
-    the endpoints, time the video manually, or skip it.
+    the endpoints, mark the timing in the playback, or skip the video.
 
     Returns:
-        (outcome, note): outcome is _REPLAY, _PROMPT, _CANCELLED or _SKIP; note
-        is a message for the review prompt, or None.
+        (outcome, note): outcome is _REPLAY, _CANCELLED or _SKIP; note is a
+        message to show in the playback, or None.
     """
     start = job.far_ep or job.subject_start
     finish = job.near_ep
@@ -417,13 +450,13 @@ def _set_endpoints(job, ui, reason=None):
         choice = ui.show_message([
             ("No walk start / end found", ORANGE),
             (summary_lines(job)[1], GREY),
-            ("Redo the endpoints, or time this video manually.", GREY),
-        ] + hint, [("Redo endpoints", "redo", ()), ("Time manually", "timing", KEY_ENTER),
+            ("Redo the endpoints, or mark the start and stop yourself in the playback.", GREY),
+        ] + hint, [("Redo endpoints", "redo", ()), ("Mark it in the playback", "mark", KEY_ENTER),
             ("Skip this file", "skip", (KEY_ESC,))], background=job.info.first_frame)
         if choice == "skip":
             return _SKIP, None
-        if choice == "timing":
-            return _PROMPT, _time_manually(job, ui, job.info.first_frame)
+        if choice == "mark":
+            return _REPLAY, "Mark the walk start and stop with the green and red dots"
         reason = None
 
 
@@ -457,6 +490,7 @@ def _pick_subject(job, ui):
 
 def _reject(job, ui, i, reason):
     job.review, job.review_note = REVIEW_REJECTED, reason
+    job.saved = False
     ui.set_state(i, FAILED, f"rejected: {reason}")
     ui.mark_reviewed(i, REJECTED_MARK)
     print(f"  Rejected ({reason}); no outputs written.")

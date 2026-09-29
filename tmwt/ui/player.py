@@ -128,7 +128,7 @@ class Player:
                  "play" if self.paused else "pause"),
                 ("Forward one frame", "forward", (), "next_frame")]
 
-    def show(self, ui, image, specs, label=None, marks=(), hotkeys=None, alert=None):
+    def show(self, ui, image, specs, label=None, marks=(), hotkeys=None, alert=None, notice=None):
         """
         Show `image` (frame k) with `specs` and the seek bar, waiting as long as
         real-time pacing needs, and apply any transport control used.
@@ -137,7 +137,8 @@ class Player:
             marks: [(time, colour)] or [(time, colour, id)] to mark on the seek
                 bar; those with an id can be dragged (see seek_state).
             hotkeys: extra {key: value} for keys without buttons.
-            alert: error text to show over the frame (see LabelerUI.show_frame).
+            alert, notice: error / information text to show over the frame
+                (see LabelerUI.show_frame).
 
         Returns:
             (value, pressed_at): a button value the caller has to handle (None
@@ -153,7 +154,8 @@ class Player:
         keys = {KEY_LEFT: "back", KEY_RIGHT: "forward", **(hotkeys or {})}
         dialogs = ui.dialogs_shown
         value, pressed_at = ui.show_frame(image, wait_ms, specs, label, hotkeys=keys,
-                                          seek=seek_state(self.times, self.k, marks, self.highlights), alert=alert)
+                                          seek=seek_state(self.times, self.k, marks, self.highlights), alert=alert,
+                                          notice=notice)
         if ui.dialogs_shown != dialogs:
             self._clock.restart()                    # a dialog paused everything: carry on from here
         if self._apply(value):

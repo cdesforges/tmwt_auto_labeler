@@ -210,7 +210,9 @@ review) a **save** button (floppy disk); the folder's name in the middle
    end are marked in green and red), the mark buttons (a **green dot** marks the
    walk start and a **red dot** the stop, at the frame on screen; `M` presses
    them in turn), frame-back / play-pause / frame-forward buttons (←, Space, →;
-   hold an arrow key to keep stepping), and **Skip to review**. Hover over an icon button to see what it does.
+   hold an arrow key to keep stepping), **Confirm** (Enter) and the menu button
+   **☰** (Esc). Hover over an icon button to see what it does. The video
+   doesn't end the playback: it pauses on the last frame.
    **Correcting the timing while you watch:** pause, then mark the start or
    stop again with the dot buttons, or drag a mark along the seek bar by the
    small tab under it (the picture follows, and the playhead hides while you
@@ -218,47 +220,57 @@ review) a **save** button (floppy disk); the folder's name in the middle
    a mark's frame, the playhead fills with that mark's colour (green or red,
    inside a white rim), so you can land on it exactly. Pressing the track itself
    always scrubs, even where a mark is. Changed marks are shown at the top
-   left (a stop before the start is flagged in red), and when you go on to
-   the review prompt they replace the automatic timing (it becomes manual).
+   left, and they replace the automatic timing (it becomes manual). A stop
+   before the start is flagged in red, and Confirm waits until it's fixed.
+
+   **Confirm** opens the final confirmation screen: the endpoints, the timing
+   (start, end, duration, speed) and any pose points checked. **Next video**
+   (Enter) approves the video and moves on; **Go back** (Esc) returns to the
+   playback, paused where you were. If the timing is incomplete, it says so
+   and offers **Go back** or **Skip this file** instead.
+
+   **☰** opens the menu:
+
+   | Option (key) | What happens |
+   |---|---|
+   | Change rope endpoints (`1`) | Re-place the endpoints on the first frame (see [Endpoint detection](#endpoint-detection)). Timing is recomputed from the cached analysis and the video replays. |
+   | Mark this file to be skipped (`2`) | No outputs are written, and it's reported as rejected. |
+   | Review flagged points (`3`) | Only for videos with flagged pose points: back to flagged-points mode (see [Pose check](#pose-check)). |
+   | Wrong person tracked (`4`) | Only when several people were tracked. Click the person doing the walk test on a frame showing everyone; timing is recomputed for them and the video replays. |
+   | Back to review (Esc) | Back to the playback, where you were. |
+   | Finish all (save all results) (`F`) | Go to the **Review complete** screen now; videos not reviewed yet keep their automatic results, marked unreviewed. |
+
    Once a video has been reviewed, the sidebar splits into **Unreviewed** and
-   **Reviewed** sections; reviewed videos move down, dimmed, with a green check
-   (approved) or a red cross (skipped).
+   **Reviewed** sections; reviewed videos move down, dimmed, with a check
+   (grey: approved, green: saved) or a red cross (skipped).
    You can click any video in the sidebar at any time to review it instead,
    including one already reviewed: it plays back with the timing you gave it,
-   and the new review replaces its result. After
-   each decision the next unreviewed video follows, wrapping round to any you
-   skipped; videos already decided are never revisited automatically.
-   It then asks whether the detection was successful:
-
-   | Button (key) | What happens |
-   |---|---|
-   | Looks good (`1` / Enter) | The video is marked approved and the next one starts right away. |
-   | Rope endpoints inaccurate (`2`) | Re-place the endpoints on the first frame (see [Endpoint detection](#endpoint-detection)). Timing is recomputed from the cached analysis and the video replays. |
-   | Walk start/stop inaccurate (`3`) | The video replays from the start with no marks: mark the start and stop with the green and red dots as above (re-mark or drag them as often as you like; the latest counts). |
-   | Wrong person tracked (`5`) | Only shown when several people were tracked. Click the person doing the walk test on a frame showing everyone; timing is recomputed for them and the video replays. |
-   | Skip this file (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
-   | Replay (`R`) | Play the video again. |
-   | Finish review (`F`) | Go to the **Review complete** screen now; videos not reviewed yet keep their automatic results, marked unreviewed. |
+   and the new review replaces its result. After each decision the next
+   unreviewed video follows, wrapping round to any you skipped; videos
+   already decided are never revisited automatically.
 
    To stop and come back later, use the top bar's **save** button (or **X**,
    then **Save progress & quit**): your decisions so far are saved, no outputs
    are written, and the next review of the folder offers to continue.
 
-3. **Save.** Once every video is reviewed (or you choose **Finish review**), a
+3. **Save.** Once every video is reviewed (or you choose **Finish all**), a
    **Review complete** screen shows what will be saved. **Save results** writes
    the outputs of every video that wasn't skipped, in one go, with a progress
    bar; the top bar's **save** button writes nothing yet and keeps your review
    progress for next time. Click a video in the sidebar to change it first; you
    come back to this screen afterwards. Nothing is written during review, so
    there's no wait between videos.
-   **Stopping part-way.** Review progress is saved as you go (after every
-   decision and whenever you switch video) to `tmwt_analysis/review_progress.json`.
-   If you save your progress and quit (top bar) or close the window, the next review of the
-   folder asks whether to **Continue** where you left off (reopening the video
-   you were on) or **Start over** (which asks whether you're sure, since it
-   discards those decisions). The file is deleted once the outputs are
-   saved. Progress for a video that has since been replaced or re-processed is
-   ignored.
+   **Progress is kept.** Review progress is saved as you go (after every
+   decision and whenever you switch video) to `tmwt_analysis/review_progress.json`,
+   and it's **kept after the results are saved**. The next review of the
+   folder asks whether to **Continue** — where you left off, or, for a
+   finished review, at **Review complete** so you can change videos and save
+   again (saved videos show green checks; a video you change goes back to a
+   grey check until the next save, and one you reject has its earlier outputs
+   removed) — or **Start over** (which asks whether you're sure, since it
+   discards those decisions). **Quit without saving** (top bar X) puts the
+   progress back as it was when that review began. Progress for a video that
+   has since been replaced or re-processed is ignored.
 4. **Report.** `labeling_report.csv` and `labeling_report.md` summarise every
    video (see [Output](#output)).
 

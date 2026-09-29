@@ -153,6 +153,22 @@ def row_pose(row):
     return pose if any(lm is not None for lm in pose) else None
 
 
+def remove_outputs(job):
+    """
+    Delete a video's outputs from an earlier save (its CSV, timing, videos and
+    pose corrections), e.g. when it has been rejected since. They can all be
+    written again from the analysis file.
+    """
+    removed = []
+    for path in (job.output_path, *output_paths(job.output_path), job.output_file(CORRECTIONS_SUFFIX)):
+        if path and os.path.exists(path):
+            os.remove(path)
+            removed.append(os.path.basename(path))
+    if removed:
+        print(f"  {job.name} is rejected: removed its earlier outputs ({', '.join(removed)})")
+    job.saved = False
+
+
 # --- Pose corrections ----------------------------------------------------------
 
 CORRECTIONS_COLUMNS = ["frame", "time_s", "landmark", "flag", "original_x", "original_y",

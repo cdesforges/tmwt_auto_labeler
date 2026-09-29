@@ -33,7 +33,6 @@ _SMOOTHED = pose_common.SMOOTHED_COLOR
 
 # Panel text shown before the walk starts.
 WAITING_AUTO = ("Waiting for person", "to start walking...")
-WAITING_MANUAL = ("Mark the start when", "the person starts walking")
 
 
 def draw_scene(img, pose, body_px, far_ep, near_ep, flags=(), smoothed=()):

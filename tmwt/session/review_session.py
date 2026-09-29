@@ -59,11 +59,13 @@ def run(jobs, ui, output_dir, review_first=True):
     Review (if there's a window and review_first), save the outputs and write
     the report; with a window, finish on a summary screen.
 
-    With a window, an unfinished earlier review of the folder can be continued
-    (review_progress.py). After reviewing, the user confirms saving first. The
-    top bar can stop the review at any point: "save progress and quit" (or
-    closing the window) keeps the review progress for next time, and "quit
-    without saving" discards it; neither writes any outputs.
+    With a window, an earlier review of the folder can be continued
+    (review_progress.py), even one whose results were saved, to change things
+    and save again. After reviewing, the user confirms saving first. The top
+    bar can stop the review at any point: "save progress and quit" (or closing
+    the window) keeps the review progress for next time, and "quit without
+    saving" puts it back as it was when this review began; neither writes any
+    outputs. The progress is kept after saving.
 
     Returns:
         True if the outputs were saved; False if the user stopped the review.
@@ -72,6 +74,7 @@ def run(jobs, ui, output_dir, review_first=True):
         WindowClosed: the user closed the window (progress is saved first).
     """
     if ui is not None and review_first:
+        before = review_progress.snapshot(jobs)
         try:
             _review(jobs, ui)
         except SaveAndQuit:
@@ -80,8 +83,8 @@ def run(jobs, ui, output_dir, review_first=True):
                   "again to continue where you left off (or start over).")
             return False
         except QuitWithoutSaving:
-            review_progress.clear(jobs)
-            print("\nQuit without saving: this review's decisions were discarded and "
+            review_progress.put_back(jobs, before)
+            print("\nQuit without saving: this review's changes were discarded and "
                   "no outputs were written.")
             return False
         except WindowClosed:
@@ -93,7 +96,7 @@ def run(jobs, ui, output_dir, review_first=True):
             ui.in_review = False
     save_outputs(jobs, ui)
     if ui is not None:
-        review_progress.clear(jobs)
+        review_progress.save(jobs, None, outputs_saved=True)   # kept, to change things later
     report_path, _ = report.write_report(jobs, output_dir, _pose_models(jobs))
     if ui is not None:
         show_summary(ui, jobs, report_path)
@@ -132,13 +135,19 @@ def ask_resume(ui, progress):
     """"Continue your previous review?" screen. Returns True to continue it."""
     approved, skipped, todo = review_progress.counts(progress)
     ui.active = None
+    saved_at = progress.get("outputs_saved")
+    lines = [
+        ("Continue your previous review?", WHITE),
+        (f"Saved {progress['saved'].replace('T', ' at ')}: {approved} approved, "
+         f"{skipped} skipped, {todo} still to review.", GREY),
+    ]
+    if saved_at:
+        lines.append((f"Its results were saved {saved_at.replace('T', ' at ')}; continue to change "
+                      f"them and save again.", GREY))
+    lines.append(("Start over discards those decisions.", GREY))
     while True:
-        choice = ui.show_message([
-            ("Continue your previous review?", WHITE),
-            (f"Saved {progress['saved'].replace('T', ' at ')}: {approved} approved, "
-             f"{skipped} skipped, {todo} still to review.", GREY),
-            ("Start over discards those decisions.", GREY),
-        ], [("Continue", "continue", KEY_ENTER + (KEY_ESC,)), ("Start over", "restart", ())])
+        choice = ui.show_message(lines, [("Continue", "continue", KEY_ENTER + (KEY_ESC,)),
+                                         ("Start over", "restart", ())])
         if choice == "continue":
             return True
         if ui.confirm("Start over?",
@@ -153,7 +162,7 @@ def _show_restored_states(jobs, ui):
     for i, job in enumerate(jobs):
         if job.review == REVIEW_APPROVED:
             ui.set_state(i, DONE, f"approved  {job.duration:.2f}s")
-            ui.mark_reviewed(i, APPROVED_MARK)
+            ui.mark_reviewed(i, SAVED_MARK if job.saved else APPROVED_MARK)
         elif job.review == REVIEW_REJECTED:
             ui.set_state(i, FAILED, f"rejected: {job.review_note}")
             ui.mark_reviewed(i, REJECTED_MARK)
@@ -303,6 +312,9 @@ def save_outputs(jobs, ui):
     rejected — approved ones and, if review was skipped or stopped early, the
     automatic results of the rest (marked unreviewed).
     """
+    for job in jobs:
+        if job.review == REVIEW_REJECTED:
+            data_export.remove_outputs(job)   # e.g. saved before, rejected since
     to_save = [(i, job) for i, job in enumerate(jobs)
                if job.frames and job.review != REVIEW_REJECTED
                and (job.far_ep is not None or job.review == REVIEW_APPROVED)]
