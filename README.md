@@ -332,6 +332,16 @@ position, the start is found by working backwards from that end:
    look-back includes the heel lift that begins the step, up to 0.3 s before
    the forward swing.
 
+   **Recordings that start just before the walk.** The standstill is best at a
+   second or more; start recording at least 2 s before "go". With less, the
+   labeler uses whatever standstill there is (if necessary running into the
+   first moments of the walk), which makes its noise estimate rough and the
+   start tend to come out a little late (about 0.2 s on `SV_10MWRT_string`).
+   Those starts are flagged on the review prompt ("Start found from very
+   little standing still…") and in the timing JSON (`timing_note`), so they
+   can be checked and the green mark dragged if needed. With no standstill at
+   all, the start isn't found and the prompt says why.
+
 Distances are perspective-corrected using the vanishing point of the subject's
 own walk (see `tmwt/measurement/metric.py`). Ankle positions are projected onto the walking line
 first, so sideways sway does not read as forward movement. The detection and its

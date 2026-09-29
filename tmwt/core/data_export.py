@@ -141,6 +141,7 @@ def write_timing(job):
         "endpoints": job.endpoint_source,
         "timing": job.timing_source,
         "start_method": job.timing_detail,
+        "timing_note": job.timing_note if job.timing_source == "auto" else "",
         "endpoint_behavior": job.endpoint_behavior,
         "review": job.review,
     }

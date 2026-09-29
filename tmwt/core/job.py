@@ -115,6 +115,7 @@ class VideoJob:
     walk_end: Optional[float] = None
     timing_source: str = ""                 # "auto" | "manual"
     timing_detail: str = ""                 # how the start was found
+    timing_note: str = ""                   # automatic start uncertain / missing: why (for the reviewer)
 
     status: str = STATUS_PENDING
     error: str = ""                         # reason for STATUS_FAILED

@@ -10,6 +10,10 @@ The start is found AFTER the whole walk has been tracked, in two steps:
   2. Find the onset: take the standstill just before that advance as each
      foot's baseline (median) and noise level (MAD). The start is the first
      frame a foot leaves its standstill band and then stays clearly forward.
+     If the recording starts so soon before the walk that there's hardly any
+     standstill, whatever there is gets used and the result is flagged
+     (info["short_standstill"]): the noise estimate is then rough, so the
+     start tends to come out a little late and should be checked.
 
 Everything here works on 1-D "distance along the course" signals in metres
 (see track_distances), so it is independent of how those distances were
@@ -33,6 +37,8 @@ CONFIRM_M = 0.5
 STILL_WINDOW_S = 1.0
 # Minimum samples in the standstill window for a trustworthy baseline.
 MIN_STILL_SAMPLES = 5
+# A standstill shorter than this is flagged as short (see find_walk_onset).
+SHORT_STILL_S = 0.5
 # Onset threshold = max(MIN_ONSET_M, NOISE_K * robust sigma of the standstill).
 MIN_ONSET_M = 0.05
 NOISE_K = 4.0
@@ -50,6 +56,10 @@ _MAD_TO_SIGMA = 1.4826
 
 class OnsetFailed(Exception):
     """Internal: carries the reason detection gave up."""
+
+
+# Failure reason when there's too little standstill before the walk to go on.
+START_TOO_SOON = "the walk starts too soon after the recording begins"
 
 
 def track_distances(samples, dist_fn):
@@ -99,7 +109,10 @@ def find_walk_onset(times, left, right, mid, end_time=None):
         says why. On success info has the confirmation time and distance
         ("walk_confirmed_at", "walk_covered_m"), per-foot "<side>_baseline_m",
         "<side>_sigma_m" and "<side>_threshold_m", every foot's "onsets", and
-        the "foot" that moved first.
+        the "foot" that moved first. "standstill_s" is how much standstill the
+        baseline came from, and "short_standstill" is True if that was less
+        than SHORT_STILL_S or had to run into the walk's first moments (the
+        start is less certain).
     """
     times = np.asarray(times, dtype=np.float64)
     left = np.asarray(left, dtype=np.float64)
@@ -108,7 +121,12 @@ def find_walk_onset(times, left, right, mid, end_time=None):
     info = {}
     try:
         i_end, t_run = _confirm_walk(times, mid, end_time, info)
-        still_mask = _standstill_mask(times, left, right, t_run)
+        still_mask, overlaps_walk = _standstill_mask(times, left, right, t_run)
+        still_times = times[still_mask]
+        info["standstill_s"] = float(still_times[-1] - still_times[0]) if len(still_times) else 0.0
+        info["short_standstill"] = overlaps_walk or info["standstill_s"] < SHORT_STILL_S
+        if min(np.isfinite(left[still_mask]).sum(), np.isfinite(right[still_mask]).sum()) < MIN_STILL_SAMPLES:
+            raise OnsetFailed(START_TOO_SOON)
         onsets = {}
         for side, d in (("left", left), ("right", right)):
             onset = _foot_onset(times, d, still_mask, i_end, side, info)
@@ -198,13 +216,24 @@ def _standstill_mask(times, left, right, t_run):
     Samples forming the standstill before the walk: STILL_WINDOW_S ending where
     the walk could first have begun (the speed window is centred, so movement
     can start up to MOVE_HALF_WINDOW_S before t_run). If the walk began too soon
-    after the video did to fill that window, everything before it is used.
+    after the video did to fill that window, everything before that point is
+    used; if even that is too little, everything before t_run (which may take
+    in the very start of the movement, making the noise estimate larger and
+    the start a little late, but is better than no start at all).
+
+    Returns:
+        (mask, overlaps_walk): overlaps_walk is True for that last resort.
     """
+    def enough(mask):
+        return min(np.isfinite(left[mask]).sum(), np.isfinite(right[mask]).sum()) >= MIN_STILL_SAMPLES
+
     still_end = t_run - MOVE_HALF_WINDOW_S
     mask = (times >= still_end - STILL_WINDOW_S) & (times <= still_end)
-    if min(np.isfinite(left[mask]).sum(), np.isfinite(right[mask]).sum()) < MIN_STILL_SAMPLES:
+    if not enough(mask):
         mask = times <= still_end
-    return mask
+    if not enough(mask):
+        return times <= t_run, True
+    return mask, False
 
 
 def _foot_onset(times, d, still_mask, i_end, side, info):

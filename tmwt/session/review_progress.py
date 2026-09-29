@@ -58,6 +58,7 @@ def save(jobs, last_index):
             "walk_end": job.walk_end,
             "timing_source": job.timing_source,
             "timing_detail": job.timing_detail,
+            "timing_note": job.timing_note,
         }
     data = {"format_version": FORMAT_VERSION,
             "saved": datetime.now().isoformat(timespec="minutes"),
@@ -131,6 +132,7 @@ def restore(jobs, progress):
             timing.apply_endpoints(job)   # per-frame positions along the new line
         job.walk_start, job.walk_end = entry["walk_start"], entry["walk_end"]
         job.timing_source, job.timing_detail = entry["timing_source"], entry["timing_detail"]
+        job.timing_note = entry.get("timing_note", "")
         job.review, job.review_note = entry["review"], entry["review_note"]
     return last
 

@@ -85,10 +85,16 @@ def apply_endpoints(job):
         f.t_smooth = s
 
 
+# timing_note texts (shown on the review prompt while the timing is automatic).
+NOTE_SHORT_STANDSTILL = ("Start found from very little standing still before the walk: "
+                         "check it (drag the green mark if needed).")
+NOTE_NO_START = "Start not found: {reason}. Mark it by hand."
+
+
 def update_timing(job):
     """Recompute the automatic walk timing from the job's current endpoints."""
     apply_endpoints(job)
-    job.walk_start, job.walk_end, job.timing_detail = detect_walk_times(job)
+    job.walk_start, job.walk_end, job.timing_detail, job.timing_note = detect_walk_times(job)
     job.timing_source = "auto"
 
 
@@ -98,8 +104,9 @@ def detect_walk_times(job):
     apply_endpoints to have run.
 
     Returns:
-        (start, end, detail): times in seconds (either may be None), and a short
-        description of how the start was found.
+        (start, end, detail, note): times in seconds (either may be None), a
+        short description of how the start was found, and a note for the
+        reviewer when the start is uncertain or missing ("" otherwise).
     """
     times = [f.time_s for f in job.frames]
     lines = _Crossings(job, times)
@@ -107,6 +114,11 @@ def detect_walk_times(job):
     first_end = lines.crossing(NEAR_T)
     start_move, info = _first_foot_movement(job, first_end)
     moved = (f"first {info['foot']} foot movement" if start_move is not None else "")
+    note = ""
+    if start_move is None:
+        note = NOTE_NO_START.format(reason=info.get("reason", "no walk found"))
+    elif info.get("short_standstill"):
+        note = NOTE_SHORT_STANDSTILL
 
     if job.far_ep_is_standing_spot:
         start, detail = start_move, moved
@@ -121,6 +133,8 @@ def detect_walk_times(job):
             detail = "start-line crossing"
             if start is None and start_move is not None:
                 start, detail = start_move, moved
+            if start is not None and detail == "start-line crossing":
+                note = ""   # the start line decided it, not the movement
 
     end = lines.crossing(NEAR_T, after=start) if start is not None else None
     rule = job.endpoint_behavior.replace("_", " ")
@@ -128,7 +142,9 @@ def detect_walk_times(job):
         print(f"  Walk STARTED at {start:.3f}s ({detail}{', ' + rule if 'line' in detail else ''})")
     if end is not None:
         print(f"  Walk FINISHED at {end:.3f}s ({rule} at the finish line)")
-    return start, end, detail
+    if note:
+        print(f"  Note: {note}")
+    return start, end, detail, note
 
 
 class _Crossings:

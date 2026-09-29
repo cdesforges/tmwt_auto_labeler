@@ -93,6 +93,8 @@ def review_job(job, ui, i):
                 note = _apply_marks(job, start, end, "marked during review")
         replay = True
 
+        if note is None and job.timing_source == "auto" and job.timing_note:
+            note = job.timing_note   # the automatic start is uncertain or missing
         choice = ui.ask_review(last_frame, summary_lines(job), note, wrong_person=several_people)
         note = None
         if choice == "approve":
