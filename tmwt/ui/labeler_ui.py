@@ -43,11 +43,11 @@ from tmwt.ui import top_bar
 from tmwt.ui.panel import Panel
 from tmwt.ui.sidebar import DEFAULT_LEGEND, Sidebar, SIDEBAR_W
 from tmwt.ui.top_bar import TOPBAR_H, TopBar
+from tmwt.ui.seek_bar import MARK, SEEK_H, SeekBar
 from tmwt.ui.widgets import (BAR_H, BTN_H, FONT, GREY, HEADER_H, KEY_BACKSPACE, KEY_ENTER,
-                             KEY_ESC, MAIN_H, MAIN_W, ORANGE, RED, WHITE, YELLOW, BLUE, SEEK_H,
-                             KeyedButton, bar_buttons, button_row, dimmed, draw_badge, draw_buttons,
-                             draw_seek_bar, draw_tooltip, frame_screen, on_seek_bar,
-                             put_centered, seek_fraction)
+                             KEY_ESC, MAIN_H, MAIN_W, ORANGE, RED, WHITE, YELLOW, BLUE,
+                             IconButton, KeyedButton, bar_buttons, button_row, dimmed, draw_badge,
+                             draw_buttons, draw_tooltip, frame_screen, put_centered)
 from tmwt.ui.window import Window
 
 WINDOW = "TMWT Labeler"
@@ -122,7 +122,8 @@ class LabelerUI:
         self._armed = None            # value of the button the mouse is pressed on
         self._armed_at = None         # when that press happened (perf_counter)
         self._armed_row = None        # sidebar row the mouse was pressed on
-        self._seeking = False         # the seek bar is being dragged
+        self.seek_bar = SeekBar()
+        self._drag = None             # what's dragged on the seek bar (see SeekBar.grab), or None
         self._in_dialog = False
         self._last_main = None        # the main area last shown (a dialog's background)
         self._window = Window(WINDOW, CANVAS_W, CANVAS_H)
@@ -219,7 +220,7 @@ class LabelerUI:
         """Forget clicks and presses left over from the previous screen."""
         self._window.mouse_events.clear()
         self._armed = self._armed_at = self._armed_row = None
-        self._seeking = False
+        self._drag = None
 
     def _button_at(self, buttons, pt):
         """The button at canvas point `pt`: a top bar button, or one of the main area's `buttons`."""
@@ -229,12 +230,14 @@ class LabelerUI:
         main_pt = self.main.local_if_inside(pt)
         return next((b for b in buttons if b.contains(main_pt)), None)
 
-    def _handle_input(self, buttons, key, hotkeys=None, seek_bar=False):
+    def _handle_input(self, buttons, key, hotkeys=None, seek_markers=None):
         """
         Apply a key and the queued mouse events to `buttons` (main-area
         pixels), the top bar and the sidebar. `hotkeys` maps extra keys (with no
-        button) to values. With `seek_bar`, a press on the seek bar starts a
-        drag (self._seeking) and the release ends it.
+        button) to values. With `seek_markers` (the seek bar's [Marker]; None if
+        there's no seek bar), a press on the seek bar starts a drag (self._drag)
+        — scrubbing, or moving a mark by its tab — and the release ends it with
+        a value from _drag_value.
 
         Returns:
             (value, pressed_at, other_clicks): the chosen button's value (or
@@ -257,11 +260,16 @@ class LabelerUI:
         while events:
             kind, pt = events.popleft()
             main_pt = self.main.to_local(pt)
-            if seek_bar and (self._seeking or (kind == "down" and on_seek_bar(main_pt))):
-                self._seeking = kind == "down"
-                if kind == "up":
-                    chosen = ("seek_end", seek_fraction(main_pt[0]))
-                continue
+            if seek_markers is not None:
+                if self._drag is None and kind == "down":
+                    self._drag = self.seek_bar.grab(main_pt, seek_markers)
+                    if self._drag is not None:
+                        continue
+                elif self._drag is not None:
+                    if kind == "up":
+                        chosen = self._drag_value(main_pt[0], done=True)
+                        self._drag = None
+                    continue
             row = self.sidebar.row_at(self.sidebar.local_if_inside(pt))
             if row is not None and row in self.review_targets:
                 # A sidebar file: clicked when released on the row it was pressed on.
@@ -337,11 +345,26 @@ class LabelerUI:
         if choice == "discard":
             raise QuitWithoutSaving()
 
-    def _interact(self, main, buttons, wait_ms, hotkeys=None, seek_bar=False):
+    def _drag_value(self, x, done):
+        """
+        The value for the seek bar drag in progress, with the pointer at main-area
+        x: ("seek", fraction) while scrubbing, ("seek_end", fraction) on release;
+        ("mark_drag", id, fraction) / ("mark_drop", id, fraction) for a mark.
+        """
+        fraction = self.seek_bar.fraction_at(x)
+        if self._drag[0] == MARK:
+            return ("mark_drop" if done else "mark_drag", self._drag[1], fraction)
+        return ("seek_end" if done else "seek", fraction)
+
+    def _interact(self, main, buttons, wait_ms, hotkeys=None, seek_markers=None):
         """Draw `buttons` over `main`, show it for up to wait_ms, and handle input."""
         img = main.copy()
-        draw_buttons(img, buttons, self._mouse(self.main), self._armed)
-        return self._handle_input(buttons, self._show(img, wait_ms), hotkeys, seek_bar)
+        mouse = self._mouse(self.main)
+        draw_buttons(img, buttons, mouse, self._armed)
+        hovered = next((b for b in buttons if isinstance(b, IconButton) and b.contains(mouse)), None)
+        if hovered is not None and self._armed is None and self._drag is None:
+            draw_tooltip(img, hovered.text, (hovered.x, hovered.y), above=True)
+        return self._handle_input(buttons, self._show(img, wait_ms), hotkeys, seek_markers)
 
     def _wait_for_choice(self, main, buttons):
         """Show `main` with `buttons` until one is chosen; return its value."""
@@ -407,15 +430,17 @@ class LabelerUI:
             label: optional text in a badge at the top left (e.g. the mode).
             hotkeys: optional {key: value} for keys with no button.
             seek: optional (fraction, markers, text) to show a seek bar above
-                the buttons: the position (0-1), [(fraction, colour)] marks,
-                and text shown at its right (e.g. the time).
+                the buttons: the playhead (0-1), [seek_bar.Marker], and text
+                shown at its right (e.g. the time).
             alert: optional error text, in red, centred above the seek bar.
 
         Returns:
             (value, pressed_at): the chosen button's value or None, and when it
             was pressed (perf_counter) — use that, not the release, for timing.
-            While the seek bar is dragged, value is ("seek", fraction); when
-            it's released, ("seek_end", fraction).
+            While the seek bar is dragged, value is ("seek", fraction), and
+            ("seek_end", fraction) when it's released; while a mark is dragged
+            by its tab, ("mark_drag", id, fraction), then ("mark_drop", id,
+            fraction).
         """
         bottom = BAR_H + (SEEK_H if seek else 0)
         main, _, _, _ = frame_screen(img, bottom=bottom)
@@ -425,14 +450,15 @@ class LabelerUI:
             draw_badge(main, alert, (MAIN_W // 2, MAIN_H - bottom - 46), RED, scale=0.6,
                        thickness=2, center=True)
         if seek:
+            fraction, markers, text = seek
             mouse = self._mouse(self.main)
-            fraction = seek_fraction(mouse[0]) if self._seeking else seek[0]
-            active = self._seeking or on_seek_bar(mouse)
-            draw_seek_bar(main, fraction, seek[1], seek[2], active)
+            drag_fraction = self.seek_bar.fraction_at(mouse[0]) if self._drag and mouse else None
+            self.seek_bar.draw(main, fraction, markers, text, hover=self.seek_bar.grab(mouse, markers),
+                               drag=self._drag, drag_fraction=drag_fraction)
         value, pressed_at, _ = self._interact(main, bar_buttons(specs), wait_ms, hotkeys,
-                                              seek_bar=bool(seek))
-        if value is None and self._seeking:
-            value = ("seek", seek_fraction(self._mouse(self.main)[0]))
+                                              seek_markers=seek[1] if seek else None)
+        if value is None and self._drag is not None and self._window.mouse_pos is not None:
+            value = self._drag_value(self._mouse(self.main)[0], done=False)
         return value, pressed_at
 
     def start_playback(self):

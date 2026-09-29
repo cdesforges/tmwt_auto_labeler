@@ -203,8 +203,17 @@ review) a **save** button (floppy disk); the folder's name in the middle
    without reviewing**; clicking a video in the sidebar starts the review there.
 2. **Review.** Each video is played back in real time with its detection
    overlaid. Below it: a seek bar (drag or click to scrub; the walk's start and
-   end are marked in green and red), frame-back / play-pause / frame-forward
-   buttons (←, Space, →), and **Skip to review**.
+   end are marked in green and red), the mark buttons (a **green dot** marks the
+   walk start and a **red dot** the stop, at the frame on screen; `M` presses
+   them in turn), frame-back / play-pause / frame-forward buttons (←, Space, →),
+   and **Skip to review**. Hover over an icon button to see what it does.
+   **Correcting the timing while you watch:** pause, then mark the start or
+   stop again with the dot buttons, or drag a mark along the seek bar by the
+   small tab under it (the picture follows, and the playhead hides while you
+   drag so you can see where the mark will land). Pressing the track itself
+   always scrubs, even where a mark is. Changed marks are shown at the top
+   left (a stop before the start is flagged in red), and when you go on to
+   the review prompt they replace the automatic timing (it becomes manual).
    Once a video has been reviewed, the sidebar splits into **Unreviewed** and
    **Reviewed** sections; reviewed videos move down, dimmed, with a green check
    (approved) or a red cross (skipped).
@@ -218,7 +227,7 @@ review) a **save** button (floppy disk); the folder's name in the middle
    |---|---|
    | Looks good (`1` / Enter) | The video is marked approved and the next one starts right away. |
    | Rope endpoints inaccurate (`2`) | Re-place the endpoints on the first frame (see [Endpoint detection](#endpoint-detection)). Timing is recomputed from the cached analysis and the video replays. |
-   | Walk start/stop inaccurate (`3`) | The video replays in real time. Click **Mark start** when the walk starts and **Mark stop** when it ends. Both buttons stay available, so you can re-mark either as often as you like (scrub or step back first if needed); the latest mark counts. `M` marks start and stop in turn (the badge at the top left says which is next); Space plays / pauses as usual. The marks are shown at the top left, and a stop before the start is flagged in red until you fix it. Each mark uses the frame on screen when the button was pressed. |
+   | Walk start/stop inaccurate (`3`) | The video replays from the start with no marks: mark the start and stop with the green and red dots as above (re-mark or drag them as often as you like; the latest counts). |
    | Wrong person tracked (`5`) | Only shown when several people were tracked. Click the person doing the walk test on a frame showing everyone; timing is recomputed for them and the video replays. |
    | Skip this file (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
    | Replay (`R`) | Play the video again. |
@@ -433,7 +442,8 @@ tmwt/
     panel.py              #   Panel: a region of the window (base of the top bar and sidebar)
     top_bar.py            #   Top bar: quit and save buttons, folder title, logo
     sidebar.py            #   Sidebar: the colour-coded file list, its states and marks
-    widgets.py            #   Colours, key codes, buttons (Button and subclasses), icons, tooltips, the seek bar
+    widgets.py            #   Colours, key codes, buttons (Button and subclasses), icons, tooltips, badges
+    seek_bar.py           #   SeekBar: scrubbing and draggable marks
     player.py             #   Playback controls shared by the review and the viewer
     annotate.py           #   Frame drawing (skeleton, rope, info panel)
 ```

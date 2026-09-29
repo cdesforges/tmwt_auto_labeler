@@ -4,9 +4,12 @@ Playback shared by the review (session/review.py) and the viewer (view.py).
 A Player keeps the position in a clip (frame index k), whether it's paused, and
 real-time pacing, and handles the transport controls: frame back / play-pause /
 frame forward (buttons and arrow keys) and dragging or clicking the seek bar
-(playback pauses while dragging and resumes after if it was playing). It also
-remembers which frame was on screen when, so a mark made with a button uses the
-frame showing when the button was pressed, not when it was released.
+(playback pauses while dragging and resumes after if it was playing). Marks
+given an id can be dragged along the seek bar by their tabs: the picture
+follows the drag like scrubbing, and the drop is handed back to the caller.
+It also remembers which frame was on screen when, so a mark made with a
+button uses the frame showing when the button was pressed, not when it was
+released.
 
 Typical loop:
 
@@ -24,6 +27,7 @@ from collections import deque
 
 import numpy as np
 
+from tmwt.ui.seek_bar import Marker
 from tmwt.ui.widgets import KEY_SPACE
 from tmwt.ui.window import KEY_LEFT, KEY_RIGHT
 
@@ -56,11 +60,13 @@ class PlaybackClock:
 def seek_state(times, k, marks=()):
     """
     LabelerUI.show_frame's `seek` for frame k of a clip whose frames are at
-    `times` (seconds): its position, [(time, colour)] `marks` as markers, and
-    the time as elapsed / total.
+    `times` (seconds): its position, `marks` as seek_bar.Markers, and the time
+    as elapsed / total. A mark is (time, colour), or (time, colour, id) to make
+    it draggable; marks with no time, or outside the clip, aren't shown.
     """
     t0, span = times[0], max(times[-1] - times[0], 1e-6)
-    markers = [((t - t0) / span, color) for t, color in marks if t is not None and t0 <= t <= times[-1]]
+    markers = [Marker((m[0] - t0) / span, m[1], m[2] if len(m) > 2 else None)
+               for m in marks if m[0] is not None and t0 <= m[0] <= times[-1]]
     return (times[k] - t0) / span, markers, f"{times[k] - t0:5.2f} / {span:5.2f} s"
 
 
@@ -100,14 +106,16 @@ class Player:
         real-time pacing needs, and apply any transport control used.
 
         Args:
-            marks: [(time, colour)] to mark on the seek bar.
+            marks: [(time, colour)] or [(time, colour, id)] to mark on the seek
+                bar; those with an id can be dragged (see seek_state).
             hotkeys: extra {key: value} for keys without buttons.
             alert: error text to show over the frame (see LabelerUI.show_frame).
 
         Returns:
             (value, pressed_at): a button value the caller has to handle (None
             if nothing, or a transport control that was applied here), and when
-            it was pressed.
+            it was pressed. A dragged mark that was dropped is ("mark", id,
+            time): the time of the frame it was dropped on, now on screen.
         """
         if self._resume_after_seek is not None:
             wait_ms = _DRAGGING_MS
@@ -122,18 +130,23 @@ class Player:
             self._clock.restart()                    # a dialog paused everything: carry on from here
         if self._apply(value):
             self._hold = True                        # show the new position before moving on
+            if isinstance(value, tuple) and value[0] == "mark_drop":
+                return ("mark", value[1], self.times[self.k]), pressed_at
             return None, pressed_at
         return value, pressed_at
 
     def _apply(self, value):
         """Apply a transport control; True if `value` was one."""
-        if isinstance(value, tuple):                 # the seek bar: ("seek" | "seek_end", fraction)
-            kind, fraction = value
+        if isinstance(value, tuple):
+            # The seek bar, scrubbed or a mark dragged: ("seek" | "seek_end",
+            # fraction) or ("mark_drag" | "mark_drop", id, fraction). Either
+            # way the picture follows the pointer.
+            kind, fraction = value[0], value[-1]
             self.k = seek_index(self.times, fraction)
             if self._resume_after_seek is None:
                 self._resume_after_seek = not self.paused
             self.paused = True                       # hold still while dragging
-            if kind == "seek_end":
+            if kind in ("seek_end", "mark_drop"):
                 self.paused = not self._resume_after_seek
                 self._resume_after_seek = None
                 self._clock.restart()

@@ -1,7 +1,7 @@
 """
 Drawing building blocks for the labeler's window (labeler_ui.py) and players:
 layout sizes, colours, key codes, text and image helpers, buttons, icons,
-tooltips and the seek bar.
+and tooltips. (The seek bar is in seek_bar.py.)
 
 Everything is drawn with OpenCV into the fixed-size main-area canvas
 (MAIN_W x MAIN_H); window.py scales it to the real window. Buttons are described
@@ -142,41 +142,6 @@ def frame_screen(img, top=0, bottom=BAR_H):
     return main, s, x0, y0 + top
 
 
-# --- Seek bar ------------------------------------------------------------------
-
-# Seek bar (show_frame's `seek`): its strip height, track ends and hit margin.
-SEEK_H = 34
-_SEEK_X0, _SEEK_X1 = 24, MAIN_W - 150
-_SEEK_Y = MAIN_H - BAR_H - SEEK_H // 2
-_SEEK_GRAB = 12     # how far above / below the track a press still grabs it
-
-
-def seek_fraction(x):
-    """Position along the seek bar (0-1) for canvas x."""
-    return min(1.0, max(0.0, (x - _SEEK_X0) / (_SEEK_X1 - _SEEK_X0)))
-
-
-def on_seek_bar(pt):
-    return (pt is not None and _SEEK_X0 - _SEEK_GRAB <= pt[0] <= _SEEK_X1 + _SEEK_GRAB
-            and abs(pt[1] - _SEEK_Y) <= _SEEK_GRAB)
-
-
-def draw_seek_bar(img, fraction, markers, text, active):
-    """
-    The seek bar: track, played part, markers [(fraction, colour)], a handle at
-    `fraction` (bigger while hovered or dragged) and `text` at its right.
-    """
-    y = _SEEK_Y
-    x = int(_SEEK_X0 + fraction * (_SEEK_X1 - _SEEK_X0))
-    cv2.line(img, (_SEEK_X0, y), (_SEEK_X1, y), (70, 70, 70), 4, cv2.LINE_AA)
-    cv2.line(img, (_SEEK_X0, y), (x, y), (200, 200, 200), 4, cv2.LINE_AA)
-    for f, color in markers:
-        mx = int(_SEEK_X0 + f * (_SEEK_X1 - _SEEK_X0))
-        cv2.line(img, (mx, y - 8), (mx, y + 8), color, 2, cv2.LINE_AA)
-    cv2.circle(img, (x, y), 9 if active else 7, WHITE, -1, cv2.LINE_AA)
-    cv2.putText(img, text, (_SEEK_X1 + 18, y + 5), FONT, 0.5, GREY, 1, cv2.LINE_AA)
-
-
 # --- Buttons -------------------------------------------------------------------
 
 class Button:
@@ -302,15 +267,15 @@ def draw_badge(img, text, pos, color, scale=0.55, thickness=1, center=False):
     return y1
 
 
-def draw_tooltip(img, text, anchor):
+def draw_tooltip(img, text, anchor, above=False):
     """
-    A small label with `text` just below `anchor` (x, y), e.g. under a hovered
-    icon button, kept inside `img`.
+    A small label with `text` just below `anchor` (x, y) — or, with `above`,
+    just above it — e.g. by a hovered icon button, kept inside `img`.
     """
     scale, pad = 0.45, 6
     (tw, th), _ = cv2.getTextSize(text, FONT, scale, 1)
     x = min(max(2, anchor[0]), img.shape[1] - tw - 2 * pad - 2)
-    y = anchor[1] + 4
+    y = anchor[1] - th - 2 * pad - 4 if above else anchor[1] + 4
     cv2.rectangle(img, (x, y), (x + tw + 2 * pad, y + th + 2 * pad), (15, 15, 15), -1)
     cv2.rectangle(img, (x, y), (x + tw + 2 * pad, y + th + 2 * pad), DIM, 1)
     cv2.putText(img, text, (x + pad, y + pad + th), FONT, scale, WHITE, 1, cv2.LINE_AA)
@@ -339,8 +304,10 @@ def button_row(specs, y):
 
 
 # Icons, drawn with shapes (the font has no symbols): media-player controls,
-# plus close (an X) and save (a floppy disk) for the top bar.
-ICONS = ("play", "pause", "prev_frame", "next_frame", "prev_video", "next_video", "close", "save")
+# the walk start / stop marks (a green / red dot, as on the seek bar), and close
+# (an X) and save (a floppy disk) for the top bar.
+ICONS = ("play", "pause", "prev_frame", "next_frame", "prev_video", "next_video",
+         "mark_start", "mark_stop", "close", "save")
 _ICON_BTN_W = 72
 
 
@@ -377,6 +344,10 @@ def draw_icon(img, icon, center, size=11, color=WHITE):
         triangle(cx + 2, -1)
         triangle(cx - 14, -1)
         bar(cx - 18)
+    elif icon in ("mark_start", "mark_stop"):       # ● in the mark's colour
+        dot = GREEN if icon == "mark_start" else RED
+        cv2.circle(img, (cx, cy), int(0.8 * s), dot, -1, cv2.LINE_AA)
+        cv2.circle(img, (cx, cy), int(0.8 * s), color, 1, cv2.LINE_AA)
     elif icon == "close":                           # X
         d = int(0.75 * s)
         cv2.line(img, (cx - d, cy - d), (cx + d, cy + d), color, 2, cv2.LINE_AA)
