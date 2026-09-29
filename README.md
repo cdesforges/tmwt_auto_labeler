@@ -114,7 +114,8 @@ A run processes every video in `--input_dir` in four phases, all in one
 resizable window.
 Every choice is an on-screen button: a click counts when the mouse is released
 over the same button it was pressed on. Most buttons also have a keyboard
-shortcut, shown on the button. The right-hand sidebar lists every file,
+shortcut, shown on the button. The right-hand sidebar lists every file (scroll
+it with the mouse wheel or trackpad when there are many),
 colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
 **green** done, **orange** needs your input at review, **red** failed or rejected.
 
@@ -132,8 +133,9 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
    | Button (key) | What happens |
    |---|---|
    | Looks good (`1` / Enter) | The video is marked approved and the next one starts right away. |
-   | Rope endpoints inaccurate (`2`) | Click the far (start) and near (finish) endpoints on the first frame, then **Confirm**, **Redo** or **Cancel**. Timing is recomputed from the cached analysis and the video replays. |
+   | Rope endpoints inaccurate (`2`) | Re-place the endpoints on the first frame (see [Endpoint detection](#endpoint-detection)). Timing is recomputed from the cached analysis and the video replays. |
    | Walk start/stop inaccurate (`3`) | The video replays in real time. Click **Mark start** when the walk starts and **Mark stop** when it ends (Space also works). The mark uses the frame on screen when the button was pressed. |
+   | Wrong person tracked (`5`) | Only shown when several people were tracked. Click the person doing the walk test on a frame showing everyone; timing is recomputed for them and the video replays. |
    | Body not detected (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
    | Replay (`R`) | Play the video again. |
    | Quit review (Esc) | Review stops; the remaining videos keep their automatic results, marked unreviewed. |
@@ -148,13 +150,31 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
 
 For each video, the labeler establishes two rope endpoints:
 
-- **Near endpoint** — position of an ArUco marker at the finish line. Auto-detected.
-- **Far endpoint** — where the subject stands at the start of the walk. Auto-detected from the pose landmarker.
+- **Near endpoint (finish)** — a corner of the ArUco marker at the finish line.
+- **Far endpoint (start)** — where the subject stands at the start of the walk:
+  their feet in the first frame they're fully seen.
 
-If there's no single ArUco marker, or not exactly one person in the first frame,
-the video is marked orange during analysis. When its review comes up you click
-both endpoints in the main window, and a clicked far endpoint is treated as the
-start line. Everything happens in that one window; nothing opens a popup.
+Without a single ArUco marker, the video is marked orange during analysis. When
+its review comes up, the start point is already placed where the subject was
+standing and you click only the **finish** point, then **Confirm**. If the
+start is wrong, **Move start point** lets you click it; a start you place is
+treated as a start line (timing starts when the subject crosses it, or at their
+first movement if they're already on or past it).
+
+If the endpoints don't give both a start and an end time, you're asked straight
+away to **Redo endpoints**, **Time manually** or **Skip this file**. A common
+cause: the subject is already walking when the video begins, so there's no
+standing start. Use **Move start point** and click the start line.
+
+## Multiple people
+
+Everyone in view is detected and followed through the video (up to five
+people), and the subject is chosen afterwards: in a 10 m walk test they walk
+toward the camera, so they grow much larger in the picture than anyone standing
+by or walking alongside. Duplicate detections of one person (common when they're
+right in front of the camera) are merged. If the wrong person was chosen, use
+**Wrong person tracked** at review; every person's poses are kept, so switching
+takes no re-analysis.
 
 ## Walk start detection
 
@@ -241,13 +261,14 @@ label.py             # Entry point: CLI and the analyse -> review -> report batc
 job.py               # Data model: VideoJob (one per video) and FrameResult (one per frame)
 video_io.py          # Opening videos: first content frame, matte crop, playback clock
 matte.py             # Letterbox / pillarbox detection and the cropping capture wrapper
-endpoints.py         # Automatic rope endpoints (ArUco finish line, subject's start spot)
+endpoints.py         # Finish line from the ArUco marker
 analysis.py          # Phase 1: pose + ground tracking over every frame
 tracking.py          # Ground-plane optical-flow tracker (camera drift)
 metric.py            # Geometry: t_along and perspective-correct distance along the course
 onset.py             # Hindsight walk-start detection on distance signals
 timing.py            # Walk start/end from the analysed frames
 review.py            # Phase 2: real-time playback and the review flow
+people.py            # Following everyone in view and choosing the walking subject
 labeler_ui.py        # The labeler's screens: progress, playback, buttons, endpoint picking, sidebar
 window.py            # The window as the labeler sees it: show a canvas, poll for keys and clicks
 window_server.py     # The window process: resizable pygame window, canvas scaled to fit

@@ -52,6 +52,7 @@ class Window:
         self._closed = False
         self.mouse_pos = None         # latest pointer position, canvas pixels
         self.mouse_events = deque()   # ("down" | "up", (x, y)) in canvas pixels
+        self.wheel_events = deque()   # (dy, (x, y)): scroll amount (+ = up) and pointer position
         atexit.register(self.close)
 
     def show(self, canvas_bgr):
@@ -63,8 +64,9 @@ class Window:
 
     def poll(self, wait_ms):
         """
-        Wait up to wait_ms for input (like cv2.waitKey). Mouse presses, releases
-        and movement are recorded on mouse_events / mouse_pos.
+        Wait up to wait_ms for input (like cv2.waitKey). Mouse presses, releases,
+        movement and scrolling are recorded on mouse_events / mouse_pos /
+        wheel_events.
 
         Returns:
             The first key pressed (cv2.waitKey-style code), CLOSE_KEY if the
@@ -84,7 +86,9 @@ class Window:
                 return message["key"]
             pos = (message["x"], message["y"])
             self.mouse_pos = pos
-            if message["mouse"] in ("down", "up"):
+            if "wheel" in message:
+                self.wheel_events.append((message["wheel"], pos))
+            elif message["mouse"] in ("down", "up"):
                 self.mouse_events.append((message["mouse"], pos))
 
     def post_test_event(self, spec):

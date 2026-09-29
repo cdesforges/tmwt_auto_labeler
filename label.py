@@ -102,18 +102,18 @@ def _progress_callback(ui, i, title, subtitle):
     if ui is None:
         next_report = [0.1]
 
-        def console(fraction, frame_bgr, pose):
+        def console(fraction, frame_bgr, poses):
             if fraction >= next_report[0]:
                 print(f"    {int(next_report[0] * 100):3d}%")
                 next_report[0] += 0.1
         return console
 
-    def window(fraction, frame_bgr, pose):
+    def window(fraction, frame_bgr, poses):
         ui.notes[i] = f"analysing {fraction * 100:.0f}%"
 
         def preview():
             img = frame_bgr.copy()
-            if pose is not None:
+            for pose in poses:
                 pose_common.draw_pose(img, pose)
             return img
         if ui.show_progress(title, subtitle, fraction, preview, cancellable=True):
@@ -126,7 +126,8 @@ def _analysis_state(job):
     if job.status == STATUS_OK:
         return DONE, f"auto  {job.duration:.2f}s"
     if job.status == STATUS_NEEDS_INPUT:
-        return NEEDS_INPUT, f"needs endpoints: {job.endpoint_problem}"
+        what = "finish point" if job.subject_start is not None else "endpoints"
+        return NEEDS_INPUT, f"needs {what}: {job.endpoint_problem}"
     if job.status == STATUS_INCOMPLETE:
         return FAILED, review.summary_lines(job)[1]
     return FAILED, job.error
@@ -142,7 +143,7 @@ def ask_to_review(ui, jobs):
     ui.active = None
     counts = [
         (sum(j.status == STATUS_OK for j in jobs), "timed automatically", GREEN),
-        (sum(j.status == STATUS_NEEDS_INPUT for j in jobs), "need rope endpoints clicked", ORANGE),
+        (sum(j.status == STATUS_NEEDS_INPUT for j in jobs), "need the finish point clicked", ORANGE),
         (sum(j.status == STATUS_INCOMPLETE for j in jobs), "with incomplete timing", RED),
         (sum(j.status == STATUS_FAILED for j in jobs), "failed", RED),
     ]

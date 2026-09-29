@@ -27,7 +27,7 @@ COURSE_M = 10.0
 STATUS_PENDING = "pending"            # not analysed yet
 STATUS_OK = "ok"                      # endpoints and full timing found automatically
 STATUS_INCOMPLETE = "incomplete"      # endpoints found, but no walk start or end
-STATUS_NEEDS_INPUT = "needs_input"    # endpoints must be clicked at review
+STATUS_NEEDS_INPUT = "needs_input"    # endpoint(s) must be clicked at review
 STATUS_FAILED = "failed"              # can't be used at all (see VideoJob.error)
 
 # Review outcome (VideoJob.review).
@@ -45,8 +45,12 @@ class FrameResult:
     frame_idx: int                         # 0 = the video's first content frame
     time_s: float                          # video timestamp
     H: Optional[np.ndarray]                # reference -> this frame homography (None if lost)
-    pose: Optional[list]                   # 33-landmark pose (pose_common), None if no body
-    body_px: Optional[Point]               # ankle midpoint in this frame's pixels
+    people: list = field(default_factory=list)   # every person's 33-landmark pose (pose_common)
+
+    # The subject (set by people.set_subject): their pose and ankle midpoint in
+    # this frame's pixels, or None where they weren't seen.
+    pose: Optional[list] = None
+    body_px: Optional[Point] = None
 
     # The subject in REFERENCE-frame pixels (see tracking.to_reference_frame).
     # Set only when both the ankles and the head were found; such frames make
@@ -72,6 +76,13 @@ class VideoJob:
 
     info: Optional[VideoInfo] = None        # set by analysis
     frames: List[FrameResult] = field(default_factory=list)
+    tracks: list = field(default_factory=list)   # people.Track per person followed
+    subject: Optional[int] = None           # id of the subject's track
+
+    # Where the subject stood at the start (reference-frame pixels): the far
+    # endpoint when it's detected automatically, and the suggested start point
+    # when the endpoints have to be clicked.
+    subject_start: Optional[Point] = None
 
     # Rope endpoints, in reference-frame pixels.
     far_ep: Optional[Point] = None

@@ -28,6 +28,7 @@ import time
 import cv2
 import numpy as np
 
+import pose_common
 from window import Window
 
 WINDOW = "TMWT Labeler"
@@ -78,6 +79,11 @@ REVIEW_OPTIONS = [
     ("R", "Replay", "replay", (ord("r"), ord("R"))),
     ("Esc", "Quit review (save the rest unreviewed)", "quit", (KEY_ESC,)),
 ]
+# Offered on the review prompt only when more than one person was tracked.
+WRONG_PERSON_OPTION = ("5", "Wrong person tracked (pick the walker)", "person", (ord("5"),))
+
+# Colours for telling people apart on the "pick the walker" screen.
+PERSON_COLORS = [(0, 255, 0), (255, 160, 0), (255, 0, 255), (0, 200, 255), (60, 60, 255)]
 
 # Layout.
 BTN_H = 44
@@ -85,6 +91,12 @@ BAR_H = 64            # bottom button bar on image screens
 HEADER_H = 84         # instruction strip above the frame when picking endpoints
 _BTN_GAP = 16
 _BTN_MIN_W = 150
+
+# Sidebar layout, and how many rows one scroll-wheel notch moves.
+_SIDEBAR_TOP = 62
+_SIDEBAR_ROW_H = 42
+_SIDEBAR_LEGEND_H = 70
+_SCROLL_ROWS_PER_NOTCH = 1.0
 
 # Minimum interval between progress redraws, so drawing never slows analysis.
 _PROGRESS_REDRAW_S = 0.07
@@ -223,13 +235,27 @@ class LabelerUI:
         self.names = list(names)
         self.states = [WAITING] * len(self.names)
         self.notes = [""] * len(self.names)
-        self.active = None            # index of the highlighted file, or None
+        self._active = None           # index of the highlighted file, or None
+        self._scroll_first = None     # first sidebar row shown; None = follow the active file
         self._last_progress_draw = 0.0
         self._armed = None            # value of the button the mouse is pressed on
         self._armed_at = None         # when that press happened (perf_counter)
+        self._wheel_accum = 0.0       # sidebar scroll not yet applied (fractional rows)
         self._window = Window(WINDOW, MAIN_W + SIDEBAR_W, MAIN_H)
 
     # --- Sidebar ---------------------------------------------------------------
+
+    @property
+    def active(self):
+        """Index of the highlighted file, or None."""
+        return self._active
+
+    @active.setter
+    def active(self, i):
+        # A new active file brings the list back to following it.
+        if i != self._active:
+            self._scroll_first = None
+        self._active = i
 
     def set_state(self, i, state, note=""):
         """Set file i's sidebar state (WAITING, WORKING, ...) and its note line."""
@@ -242,12 +268,10 @@ class LabelerUI:
         cv2.putText(panel, f"Videos ({len(self.names)})", (x0, 35), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
         cv2.line(panel, (x0, 48), (SIDEBAR_W - x0, 48), DIM, 1)
 
-        row_h, top, legend_h = 42, 62, 70
-        visible = max(1, (MAIN_H - top - legend_h) // row_h)
-        # Keep the active file in view when the batch is longer than the list.
-        first = 0
-        if self.active is not None and len(self.names) > visible:
-            first = min(max(0, self.active - visible // 2), len(self.names) - visible)
+        top, legend_h = _SIDEBAR_TOP, _SIDEBAR_LEGEND_H
+        visible = self._sidebar_rows()
+        first = self._sidebar_first()
+        row_h = _SIDEBAR_ROW_H
 
         for row, i in enumerate(range(first, min(len(self.names), first + visible))):
             y = top + row * row_h
@@ -258,10 +282,13 @@ class LabelerUI:
             if self.notes[i]:
                 note = _truncate(self.notes[i], SIDEBAR_W - 2 * x0 - 12, 0.4)
                 cv2.putText(panel, note, (x0 + 12, y + 31), FONT, 0.4, GREY, 1, cv2.LINE_AA)
-        if first > 0:
-            cv2.putText(panel, "...", (SIDEBAR_W - 40, top - 2), FONT, 0.5, GREY, 1)
-        if first + visible < len(self.names):
-            cv2.putText(panel, "...", (SIDEBAR_W - 40, MAIN_H - legend_h), FONT, 0.5, GREY, 1)
+        if len(self.names) > visible:
+            # Scrollbar: the thumb's size and position show which part of the list is in view.
+            track_top, track_h = top - 4, visible * row_h
+            thumb_h = max(20, track_h * visible // len(self.names))
+            thumb_y = track_top + (track_h - thumb_h) * first // (len(self.names) - visible)
+            cv2.rectangle(panel, (SIDEBAR_W - 6, track_top), (SIDEBAR_W - 3, track_top + track_h), (45, 45, 45), -1)
+            cv2.rectangle(panel, (SIDEBAR_W - 6, thumb_y), (SIDEBAR_W - 3, thumb_y + thumb_h), DIM, -1)
 
         y = MAIN_H - legend_h + 20
         cv2.line(panel, (x0, y - 15), (SIDEBAR_W - x0, y - 15), DIM, 1)
@@ -276,12 +303,39 @@ class LabelerUI:
             x += tw + 26
         return panel
 
+    def _sidebar_rows(self):
+        """How many file rows fit in the sidebar."""
+        return max(1, (MAIN_H - _SIDEBAR_TOP - _SIDEBAR_LEGEND_H) // _SIDEBAR_ROW_H)
+
+    def _sidebar_first(self):
+        """Index of the first file row shown: the user's scroll position, or centred on the active file."""
+        visible = self._sidebar_rows()
+        last_start = max(0, len(self.names) - visible)
+        if self._scroll_first is not None:
+            return min(max(0, self._scroll_first), last_start)
+        if self._active is None:
+            return 0
+        return min(max(0, self._active - visible // 2), last_start)
+
+    def _apply_scrolling(self):
+        """Scroll the sidebar by any wheel / trackpad movement made over it."""
+        while self._window.wheel_events:
+            dy, pos = self._window.wheel_events.popleft()
+            if pos is not None and pos[0] >= MAIN_W:
+                self._wheel_accum -= dy * _SCROLL_ROWS_PER_NOTCH
+        rows = int(self._wheel_accum)
+        if rows:
+            self._wheel_accum -= rows
+            self._scroll_first = self._sidebar_first() + rows
+
     # --- Showing a screen and handling input -----------------------------------
 
     def _show(self, main, wait_ms):
         """Display `main` + sidebar and wait up to wait_ms for a key (window.KEY_NONE if none)."""
         self._window.show(np.hstack([main, self._sidebar()]))
-        return self._window.poll(wait_ms)
+        key = self._window.poll(wait_ms)
+        self._apply_scrolling()
+        return key
 
     def _new_screen(self):
         """Forget clicks and presses left over from the previous screen."""
@@ -361,6 +415,7 @@ class LabelerUI:
         now = time.perf_counter()
         if not force and now - self._last_progress_draw < _PROGRESS_REDRAW_S:
             value, _, _ = self._handle_input(buttons, self._window.poll(0))
+            self._apply_scrolling()
             return value == "cancel"
         self._last_progress_draw = now
 
@@ -413,13 +468,17 @@ class LabelerUI:
             y += 45 if k == 0 else 30
         return self._wait_for_choice(main, button_row(specs, y + 20))
 
-    def ask_review(self, background, summary_lines, note=None):
+    def ask_review(self, background, summary_lines, note=None, wrong_person=False):
         """
         The review prompt over the last frame: the detection summary and one
-        button per option in REVIEW_OPTIONS. Returns the chosen option's value.
+        button per option in REVIEW_OPTIONS, plus WRONG_PERSON_OPTION if
+        `wrong_person`. Returns the chosen option's value.
         """
+        options = list(REVIEW_OPTIONS)
+        if wrong_person:
+            options.insert(-2, WRONG_PERSON_OPTION)   # before Replay and Quit
         main = _dimmed(background, _DIM_PROMPT)
-        y = 110
+        y = 100 if wrong_person else 110
         _put_centered(main, "Was the detection successful?", y, 0.9, WHITE, 2)
         y += 40
         for text in summary_lines:
@@ -429,7 +488,7 @@ class LabelerUI:
 
         btn_w, gap = 560, 10
         buttons = []
-        for key_label, text, value, keys in REVIEW_OPTIONS:
+        for key_label, text, value, keys in options:
             buttons.append(Button(((MAIN_W - btn_w) // 2, y, btn_w, BTN_H), text, value,
                                   keys, key_label=f"[{key_label}]"))
             y += BTN_H + gap
@@ -437,19 +496,24 @@ class LabelerUI:
             _put_centered(main, note, y + 18, 0.55, ORANGE, 1)
         return self._wait_for_choice(main, buttons)
 
-    def pick_endpoints(self, frame, reason=None, previous=None):
+    def pick_endpoints(self, frame, reason=None, start=None, finish=None):
         """
-        Let the user click the rope endpoints on `frame`: first the far endpoint
-        (start of the walk), then the near endpoint (finish line). Buttons: Undo
-        and Cancel while clicking; Redo, Confirm and Cancel once both are placed.
+        Let the user set the rope endpoints on `frame`: the START point (far
+        endpoint, where the walk begins) and the FINISH point (near endpoint).
+
+        A given `start` (e.g. where the subject was detected standing) is
+        pre-placed, so usually only the finish is clicked; "Move start point"
+        lets the user click a new one. A given `finish` is pre-placed too.
+        Once both are placed: Confirm, Redo finish point, Move start point, or
+        Cancel.
 
         Args:
             frame: the video's first frame (the endpoints are in its pixels).
             reason: optional line explaining why clicks are needed.
-            previous: optional (far, near) currently in use, drawn faintly.
 
         Returns:
-            ((far_x, far_y), (near_x, near_y)) in frame pixels, or None if cancelled.
+            (start, finish, start_moved) in frame pixels — start_moved is True
+            if the user placed the start point themselves — or None if cancelled.
         """
         base, scale, ox, oy = _frame_screen(frame, top=HEADER_H)
         fh, fw = frame.shape[:2]
@@ -457,47 +521,94 @@ class LabelerUI:
         def to_screen(p):
             return (int(p[0] * scale + ox), int(p[1] * scale + oy))
 
-        prompts = ["Click the FAR endpoint (start of the walk)",
-                   "Click the NEAR endpoint (finish line)",
-                   "Check the line, then Confirm or Redo"]
+        prompts = {
+            "start": "Click the START point (where the walk begins)",
+            "finish": "Click the FINISH point (end of the course)",
+            None: "Check the line, then Confirm",
+        }
         cancel = ("Cancel", "cancel", (KEY_ESC,))
-        points = []
+        move = ("Move start point", "move", ())
+        placing = "start" if start is None else ("finish" if finish is None else None)
+        moved = False
         self._new_screen()
         while True:
             main = base.copy()
-            if previous is not None:
-                cv2.line(main, to_screen(previous[0]), to_screen(previous[1]), DIM, 1)
-                cv2.putText(main, "previous", to_screen(previous[0]), FONT, 0.45, DIM, 1, cv2.LINE_AA)
-            if len(points) == 2:
-                cv2.line(main, to_screen(points[0]), to_screen(points[1]), YELLOW, 2)
-            for p, color in zip(points, (BLUE, RED)):
-                cv2.circle(main, to_screen(p), 7, color, -1)
+            if start is not None and finish is not None:
+                cv2.line(main, to_screen(start), to_screen(finish), YELLOW, 2)
+            for p, color, label in ((start, BLUE, "START"), (finish, RED, "FINISH")):
+                if p is not None:
+                    sp = to_screen(p)
+                    cv2.circle(main, sp, 7, color, -1)
+                    cv2.putText(main, label, (sp[0] + 10, sp[1] - 8), FONT, 0.5, color, 2, cv2.LINE_AA)
             y = 32
             if reason:
                 cv2.putText(main, reason, (16, y), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
                 y += 30
-            cv2.putText(main, prompts[len(points)], (16, y), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
+            cv2.putText(main, prompts[placing], (16, y), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
 
-            if len(points) == 2:
-                specs = [("Redo", "redo", ()), ("Confirm", "confirm", KEY_ENTER), cancel]
-            elif points:
-                specs = [("Undo", "undo", KEY_BACKSPACE), cancel]
+            if placing == "start":
+                specs = [("Keep start point", "keep", ()), cancel] if start is not None else [cancel]
+            elif placing == "finish":
+                specs = [move, cancel]
             else:
-                specs = [cancel]
+                specs = [move, ("Redo finish point", "redo", KEY_BACKSPACE),
+                         ("Confirm", "confirm", KEY_ENTER), cancel]
             value, _, clicks = self._interact(main, _bar_buttons(specs), 30)
 
             if value == "cancel":
                 return None
             if value == "confirm":
-                return points[0], points[1]
-            if value == "redo":
-                points = []
-            elif value == "undo":
-                points.pop()
+                return start, finish, moved
+            if value == "move":
+                placing = "start"
+            elif value == "keep":
+                placing = "finish" if finish is None else None
+            elif value == "redo":
+                finish, placing = None, "finish"
             for cx, cy in clicks:
                 fx, fy = (cx - ox) / scale, (cy - oy) / scale
-                if len(points) < 2 and cx < MAIN_W and 0 <= fx < fw and 0 <= fy < fh:
-                    points.append((int(round(fx)), int(round(fy))))
+                if placing is None or cx >= MAIN_W or not (0 <= fx < fw and 0 <= fy < fh):
+                    continue
+                point = (int(round(fx)), int(round(fy)))
+                if placing == "start":
+                    start, moved = point, True
+                    placing = "finish" if finish is None else None
+                else:
+                    finish, placing = point, None
+
+    def pick_person(self, frame, poses, reason):
+        """
+        Let the user click the walking subject among `poses` (people in `frame`),
+        each drawn in its own colour with a number. Returns the index of the
+        chosen pose, or None if cancelled.
+        """
+        img = frame.copy()
+        fh, fw = frame.shape[:2]
+        boxes = []
+        for k, pose in enumerate(poses):
+            color = PERSON_COLORS[k % len(PERSON_COLORS)]
+            pose_common.draw_pose(img, pose, color=color, point_radius=5, line_thickness=3)
+            xs = [lm.x * fw for lm in pose if lm is not None]
+            ys = [lm.y * fh for lm in pose if lm is not None]
+            pad = 0.15 * (max(ys) - min(ys)) + 10
+            boxes.append((min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad))
+            cv2.putText(img, str(k + 1), (int(min(xs)), int(min(ys) - pad)), FONT, 1.0, color, 3, cv2.LINE_AA)
+
+        base, scale, ox, oy = _frame_screen(img, top=HEADER_H)
+        cv2.putText(base, reason, (16, 32), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
+        cv2.putText(base, "Click the person doing the walk test", (16, 62), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
+        buttons = _bar_buttons([("Cancel", "cancel", (KEY_ESC,))])
+        self._new_screen()
+        while True:
+            value, _, clicks = self._interact(base, buttons, 30)
+            if value == "cancel":
+                return None
+            for cx, cy in clicks:
+                fx, fy = (cx - ox) / scale, (cy - oy) / scale
+                hits = [k for k, (x0, y0, x1, y1) in enumerate(boxes) if x0 <= fx <= x1 and y0 <= fy <= y1]
+                if hits:
+                    # Overlapping boxes: take the person whose centre is closest.
+                    return min(hits, key=lambda k: abs((boxes[k][0] + boxes[k][2]) / 2 - fx))
 
     def close(self):
         self._window.close()

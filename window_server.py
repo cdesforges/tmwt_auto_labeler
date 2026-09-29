@@ -25,6 +25,7 @@ Protocol, one line per message:
   stdout (to window.py), JSON:
     {"key": code}                                  key press, cv2.waitKey-style code
     {"mouse": "down" | "up" | "move", "x": x, "y": y}   left button / pointer, canvas pixels
+    {"wheel": dy, "x": x, "y": y}                  scroll (positive = up / back), pointer position
 
 Closing the window sends {"key": 27} (Esc, which every screen treats as cancel)
 and exits.
@@ -72,6 +73,7 @@ class _Display:
         self._frame = None            # last canvas, as a surface (for repaints)
         self.scale = 1.0              # canvas -> window scale
         self.offset = (0, 0)          # window position of the canvas's top-left corner
+        self.pointer = (0, 0)         # last pointer position, window pixels
 
     def set_canvas(self, canvas_bgr):
         """Display a BGR canvas."""
@@ -116,11 +118,16 @@ class _Display:
                 return {"key": ord(event.unicode)}
         elif event.type == pygame.MOUSEMOTION:
             return self._mouse("move", event.pos)
+        elif event.type == pygame.MOUSEWHEEL:
+            dy = getattr(event, "precise_y", event.y)   # fractional on trackpads
+            x, y = self.to_canvas(self.pointer)
+            return {"wheel": dy, "x": x, "y": y}
         elif event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP) and event.button == 1:
             return self._mouse("down" if event.type == pygame.MOUSEBUTTONDOWN else "up", event.pos)
         return None
 
     def _mouse(self, kind, pos):
+        self.pointer = pos
         x, y = self.to_canvas(pos)
         return {"mouse": kind, "x": x, "y": y}
 
@@ -130,6 +137,10 @@ def _test_event(spec, display):
     Test hook for the "post" command: a resize, or a mouse event at a canvas
     position (converted to window pixels, so the real mapping back is exercised).
     """
+    if spec["type"] == "wheel":
+        display.pointer = display.to_window((spec["x"], spec["y"]))
+        return pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=int(spec["dy"]),
+                                  precise_x=0.0, precise_y=float(spec["dy"]), flipped=False)
     if spec["type"] == "resize":
         display.screen = pygame.display.set_mode((spec["w"], spec["h"]), pygame.RESIZABLE)
         return pygame.event.Event(pygame.VIDEORESIZE, size=(spec["w"], spec["h"]),

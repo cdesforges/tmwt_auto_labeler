@@ -4,24 +4,37 @@ Phase 2 of a run: review each analysed video with the user.
 Each video plays back in real time with its detection drawn on, then pauses on
 a prompt (LabelerUI.ask_review):
   - Looks good               -> approved (outputs are written after review)
-  - Rope endpoints inaccurate -> click new endpoints; timing is recomputed from
-                                the cached analysis and the video replays
+  - Rope endpoints inaccurate -> re-place the endpoints; timing is recomputed
+                                from the cached analysis and the video replays
   - Walk start/stop inaccurate -> replay, marking the start and stop with a button
+  - Wrong person tracked     -> (only with several people) click the walker;
+                                timing is recomputed and the video replays
   - Body not detected        -> the file is rejected; nothing is saved
-Videos whose endpoints couldn't be found automatically ask for clicks first.
+Videos whose endpoints couldn't be found automatically ask for clicks first,
+with the start point pre-placed where the subject was detected standing. If new
+endpoints don't give a complete timing, the user is asked straight away to redo
+them, time the video manually, or skip it.
 """
 
 import time
 from collections import deque
 
+import cv2
+
 import annotate
+import people
 import timing
 import video_io
 from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED
 from labeler_ui import (DONE, FAILED, GREY, KEY_ENTER, KEY_ESC, KEY_SPACE,
-                        WHITE, WORKING)
+                        ORANGE, WHITE, WORKING)
 
 QUIT = "quit"
+# Outcomes of setting endpoints (_set_endpoints).
+_REPLAY = "replay"        # complete timing found: play the video with it
+_PROMPT = "prompt"        # back to the review prompt without replaying
+_CANCELLED = "cancelled"  # the user cancelled endpoint picking
+_SKIP = "skip"            # the user chose to skip the file
 # Recent frames remembered during playback, to find what was on screen when a
 # mark button was pressed (a few seconds' worth).
 _SHOWN_HISTORY = 300
@@ -38,22 +51,28 @@ def review_job(job, ui, i):
     ui.active = i
     ui.set_state(i, WORKING)
 
-    if job.far_ep is None:
-        reason = f"{job.name}: automatic detection failed ({job.endpoint_problem})"
-        if not _set_manual_endpoints(job, ui, reason):
-            _reject(job, ui, i, "rope endpoints not set")
-            return None
-
-    last_frame = job.info.first_frame
     note = None
     replay = True
+    if job.far_ep is None or job.near_ep is None:
+        reason = f"{job.name}: automatic detection failed ({job.endpoint_problem})"
+        outcome, note = _set_endpoints(job, ui, reason)
+        if outcome == _CANCELLED:
+            _reject(job, ui, i, "rope endpoints not set")
+            return None
+        if outcome == _SKIP:
+            _reject(job, ui, i, "no walk timing found")
+            return None
+        replay = outcome == _REPLAY
+
+    several_people = people.people_on_screen(job)[0] is not None
+    last_frame = job.info.first_frame
     while True:
         if replay:
             _, _, frame = playback(job, ui)
             last_frame = frame if frame is not None else last_frame
         replay = True
 
-        choice = ui.ask_review(last_frame, summary_lines(job), note)
+        choice = ui.ask_review(last_frame, summary_lines(job), note, wrong_person=several_people)
         note = None
         if choice == "approve":
             if job.duration is None:
@@ -64,7 +83,13 @@ def review_job(job, ui, i):
             ui.set_state(i, DONE, f"approved  {job.duration:.2f}s")
             return None
         if choice == "endpoints":
-            replay = _set_manual_endpoints(job, ui, previous=(job.far_ep, job.near_ep))
+            outcome, note = _set_endpoints(job, ui)
+            if outcome == _SKIP:
+                _reject(job, ui, i, "no walk timing found")
+                return None
+            replay = outcome == _REPLAY
+        elif choice == "person":
+            replay = _pick_subject(job, ui)
         elif choice == "timing":
             note = _time_manually(job, ui, last_frame)
             replay = False
@@ -200,18 +225,73 @@ def summary_lines(job):
     return lines
 
 
-def _set_manual_endpoints(job, ui, reason=None, previous=None):
+def _set_endpoints(job, ui, reason=None):
     """
-    Ask for new endpoints in the window, then recompute the timing.
-    Returns False if the user cancelled.
+    Let the user (re)place the endpoints, with the start point pre-placed at the
+    current start (or where the subject was detected standing), then recompute
+    the timing. If that timing is incomplete, ask straight away whether to redo
+    the endpoints, time the video manually, or skip it.
+
+    Returns:
+        (outcome, note): outcome is _REPLAY, _PROMPT, _CANCELLED or _SKIP; note
+        is a message for the review prompt, or None.
     """
-    picked = ui.pick_endpoints(job.info.first_frame, reason, previous)
-    if picked is None:
+    start = job.far_ep or job.subject_start
+    finish = job.near_ep
+    while True:
+        picked = ui.pick_endpoints(job.info.first_frame, reason, start, finish)
+        if picked is None:
+            return _CANCELLED, None
+        start, finish, moved = picked
+        job.far_ep, job.near_ep = start, finish
+        # Unmoved start at the detected standing spot keeps the standing-start
+        # timing; a start the user placed is a start line.
+        job.far_ep_is_standing_spot = not moved and start == job.subject_start
+        job.endpoint_source = "auto start, manual finish" if job.far_ep_is_standing_spot else "manual"
+        print(f"  Endpoints: start {start} ({'detected' if not moved else 'clicked'}), finish {finish}")
+        timing.update_timing(job)
+        if job.duration is not None:
+            return _REPLAY, None
+
+        hint = ([("If the subject was already walking when the video starts, use", GREY),
+                 ("Redo endpoints > Move start point and click the start line.", GREY)]
+                if job.far_ep_is_standing_spot else [])
+        choice = ui.show_message([
+            ("No walk start / end found", ORANGE),
+            (summary_lines(job)[1], GREY),
+            ("Redo the endpoints, or time this video manually.", GREY),
+        ] + hint, [("Redo endpoints", "redo", ()), ("Time manually", "timing", KEY_ENTER),
+            ("Skip this file", "skip", (KEY_ESC,))], background=job.info.first_frame)
+        if choice == "skip":
+            return _SKIP, None
+        if choice == "timing":
+            return _PROMPT, _time_manually(job, ui, job.info.first_frame)
+        reason = None
+
+
+def _pick_subject(job, ui):
+    """
+    Show a frame with the tracked people and let the user click the walker, then
+    recompute the timing for that person. Returns False if nothing changed.
+    """
+    frame_idx, present = people.people_on_screen(job)
+    if frame_idx is None:
         return False
-    job.far_ep, job.near_ep = picked
-    job.endpoint_source = "manual"
-    job.far_ep_is_standing_spot = False  # a clicked far endpoint is a start line
-    print(f"  Manual endpoints: far {job.far_ep}, near {job.near_ep}")
+    cap = job.open_capture()
+    cap.set(cv2.CAP_PROP_POS_FRAMES, job.info.first_frame_idx + frame_idx)
+    ok, frame = cap.read()
+    cap.release()
+    if not ok:
+        return False
+    k = ui.pick_person(frame, [pose for _, pose in present],
+                       f"{job.name}: {len(present)} people in view")
+    if k is None:
+        return False
+    people.set_subject(job, present[k][0])
+    job.subject_start = people.subject_start(job)
+    if job.far_ep_is_standing_spot and job.subject_start is not None:
+        job.far_ep = job.subject_start   # the start point is where this person stood
+    print(f"  Subject changed to person {k + 1} of {len(present)}")
     timing.update_timing(job)
     return True
 
