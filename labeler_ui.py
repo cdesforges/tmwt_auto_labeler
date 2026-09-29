@@ -1,14 +1,16 @@
 """
-Batch viewer window for label.py.
+The labeler's single window. Nothing else in the labeler opens a window.
 
-One OpenCV window with two regions:
-  - Main area (left): analysis progress, real-time playback and the review prompt.
-  - Sidebar (right): every video in the batch, colour-coded by status —
+Two regions:
+  - Main area (left): analysis progress, real-time playback, endpoint picking
+    and the review prompt.
+  - Sidebar (right): every video in the batch, colour-coded by state:
       white  = waiting
       yellow = being analysed / reviewed / saved
-      green  = done (auto timing found, or approved at review)
-      orange = needs your input at review (e.g. no ArUco marker to place endpoints)
+      green  = done (automatic timing found, or approved at review)
+      orange = needs your input at review (e.g. endpoints must be clicked)
       red    = failed or rejected
+      grey   = saved without review
 """
 
 import time
@@ -19,6 +21,7 @@ import numpy as np
 WINDOW = "TMWT Labeler"
 MAIN_W, MAIN_H = 960, 720
 SIDEBAR_W = 320
+FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 WHITE = (255, 255, 255)
 GREY = (150, 150, 150)
@@ -27,21 +30,33 @@ YELLOW = (0, 255, 255)
 GREEN = (0, 200, 0)
 ORANGE = (0, 150, 255)
 RED = (60, 60, 255)
+BLUE = (255, 0, 0)
 
-STATUS_COLORS = {
-    "pending": WHITE,
-    "analysing": YELLOW,
-    "reviewing": YELLOW,
-    "saving": YELLOW,
-    "ok": GREEN,
-    "approved": GREEN,
-    "needs_input": ORANGE,
-    "failed": RED,
-    "rejected": RED,
-    "unreviewed": GREY,
+# Key codes returned by cv2.waitKey (masked to 8 bits).
+KEY_NONE = 255
+KEY_ESC = 27
+KEY_ENTER = (13, 10)
+KEY_BACKSPACE = (8, 127)
+
+# Sidebar states and their colours.
+WAITING = "waiting"
+WORKING = "working"
+DONE = "done"
+NEEDS_INPUT = "needs_input"
+FAILED = "failed"
+UNREVIEWED = "unreviewed"
+STATE_COLORS = {
+    WAITING: WHITE,
+    WORKING: YELLOW,
+    DONE: GREEN,
+    NEEDS_INPUT: ORANGE,
+    FAILED: RED,
+    UNREVIEWED: GREY,
 }
+_LEGEND = [("waiting", WHITE), ("working", YELLOW), ("done", GREEN),
+           ("needs input", ORANGE), ("failed", RED)]
 
-# Review prompt options: (key label, description, choice id).
+# Review prompt: (key label, description, choice id), and the keys for each choice.
 REVIEW_OPTIONS = [
     ("1", "Looks good", "approve"),
     ("2", "Rope endpoints inaccurate (re-click them)", "endpoints"),
@@ -51,19 +66,23 @@ REVIEW_OPTIONS = [
     ("Esc", "Quit review (save the rest unreviewed)", "quit"),
 ]
 _REVIEW_KEYS = {
-    ord("1"): "approve", 13: "approve", 10: "approve",
+    ord("1"): "approve", **{k: "approve" for k in KEY_ENTER},
     ord("2"): "endpoints",
     ord("3"): "timing",
     ord("4"): "body",
     ord("r"): "replay", ord("R"): "replay",
-    27: "quit",
+    KEY_ESC: "quit",
 }
 
 # Minimum interval between progress redraws, so drawing never slows analysis.
 _PROGRESS_REDRAW_S = 0.07
+# Brightness of a background frame behind text.
+_DIM_PROGRESS = 0.3
+_DIM_MESSAGE = 0.25
+_DIM_PROMPT = 0.12
 
-FONT = cv2.FONT_HERSHEY_SIMPLEX
 
+# --- Drawing helpers -----------------------------------------------------------
 
 def _put_centered(img, text, y, scale, color, thickness=1):
     (tw, _), _ = cv2.getTextSize(text, FONT, scale, thickness)
@@ -80,36 +99,54 @@ def _truncate(text, max_w, scale, thickness=1):
     return text + "..."
 
 
-def fit_to(img, w, h):
-    """Scale `img` to fit inside w x h (keeping aspect) and centre it on black."""
+def _fit(img, w, h):
+    """
+    Scale `img` to fit inside w x h (keeping aspect) and centre it on black.
+
+    Returns:
+        (canvas, scale, x0, y0): image pixel (x, y) lands at canvas pixel
+        (x * scale + x0, y * scale + y0).
+    """
     canvas = np.zeros((h, w, 3), dtype=np.uint8)
     if img is None:
-        return canvas
+        return canvas, 1.0, 0, 0
     ih, iw = img.shape[:2]
     s = min(w / iw, h / ih)
     nw, nh = max(1, int(iw * s)), max(1, int(ih * s))
-    resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
+    interp = cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR
     x0, y0 = (w - nw) // 2, (h - nh) // 2
-    canvas[y0:y0 + nh, x0:x0 + nw] = resized
-    return canvas
+    canvas[y0:y0 + nh, x0:x0 + nw] = cv2.resize(img, (nw, nh), interpolation=interp)
+    return canvas, s, x0, y0
+
+
+def _dimmed(img, brightness):
+    """`img` fitted to the main area and darkened, as a background for text."""
+    return (_fit(img, MAIN_W, MAIN_H)[0] * brightness).astype(np.uint8)
 
 
 class LabelerUI:
-    """The single batch window. All drawing and key polling goes through here."""
+    """The batch window. All drawing, key polling and clicks go through here."""
 
     def __init__(self, names):
         self.names = list(names)
-        self.status = ["pending"] * len(self.names)
+        self.states = [WAITING] * len(self.names)
         self.notes = [""] * len(self.names)
-        self.active = None
+        self.active = None            # index of the highlighted file, or None
         self._last_progress_draw = 0.0
+        self._click = None            # last left-click in window pixels
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WINDOW, MAIN_W + SIDEBAR_W, MAIN_H)
+        cv2.setMouseCallback(WINDOW, self._on_mouse)
 
-    # --- Sidebar -------------------------------------------------------------
+    def _on_mouse(self, event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self._click = (x, y)
 
-    def set_status(self, i, status, note=""):
-        self.status[i] = status
+    # --- Sidebar ---------------------------------------------------------------
+
+    def set_state(self, i, state, note=""):
+        """Set file i's sidebar state (WAITING, WORKING, ...) and its note line."""
+        self.states[i] = state
         self.notes[i] = note
 
     def _sidebar(self):
@@ -118,9 +155,7 @@ class LabelerUI:
         cv2.putText(panel, f"Videos ({len(self.names)})", (x0, 35), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
         cv2.line(panel, (x0, 48), (SIDEBAR_W - x0, 48), DIM, 1)
 
-        row_h = 42
-        top = 62
-        legend_h = 70
+        row_h, top, legend_h = 42, 62, 70
         visible = max(1, (MAIN_H - top - legend_h) // row_h)
         # Keep the active file in view when the batch is longer than the list.
         first = 0
@@ -129,11 +164,10 @@ class LabelerUI:
 
         for row, i in enumerate(range(first, min(len(self.names), first + visible))):
             y = top + row * row_h
-            color = STATUS_COLORS.get(self.status[i], WHITE)
             if i == self.active:
                 cv2.rectangle(panel, (5, y - 4), (SIDEBAR_W - 5, y + row_h - 8), (55, 55, 55), -1)
             name = _truncate(f"{i + 1}. {self.names[i]}", SIDEBAR_W - 2 * x0, 0.5)
-            cv2.putText(panel, name, (x0, y + 14), FONT, 0.5, color, 1, cv2.LINE_AA)
+            cv2.putText(panel, name, (x0, y + 14), FONT, 0.5, STATE_COLORS[self.states[i]], 1, cv2.LINE_AA)
             if self.notes[i]:
                 note = _truncate(self.notes[i], SIDEBAR_W - 2 * x0 - 12, 0.4)
                 cv2.putText(panel, note, (x0 + 12, y + 31), FONT, 0.4, GREY, 1, cv2.LINE_AA)
@@ -142,13 +176,10 @@ class LabelerUI:
         if first + visible < len(self.names):
             cv2.putText(panel, "...", (SIDEBAR_W - 40, MAIN_H - legend_h), FONT, 0.5, GREY, 1)
 
-        # Legend
         y = MAIN_H - legend_h + 20
         cv2.line(panel, (x0, y - 15), (SIDEBAR_W - x0, y - 15), DIM, 1)
-        entries = [("waiting", WHITE), ("working", YELLOW), ("done", GREEN),
-                   ("needs input", ORANGE), ("failed", RED)]
         x = x0
-        for label, color in entries:
+        for label, color in _LEGEND:
             (tw, _), _ = cv2.getTextSize(label, FONT, 0.38, 1)
             if x + tw + 16 > SIDEBAR_W - x0:
                 x = x0
@@ -159,28 +190,37 @@ class LabelerUI:
         return panel
 
     def _show(self, main, wait_ms):
+        """Display `main` + sidebar and wait up to wait_ms for a key (KEY_NONE if none)."""
         cv2.imshow(WINDOW, np.hstack([main, self._sidebar()]))
         return cv2.waitKey(max(1, int(wait_ms))) & 0xFF
 
-    # --- Screens -------------------------------------------------------------
+    def _wait_for_key(self, main):
+        """Display `main` until any key is pressed; return it."""
+        while True:
+            key = self._show(main, 50)
+            if key != KEY_NONE:
+                return key
+
+    # --- Screens ---------------------------------------------------------------
 
     def show_progress(self, title, subtitle, fraction, preview=None, force=False):
         """
-        Progress screen: optional dimmed preview frame behind a title, a subtitle
-        and a progress bar. Redraws are throttled; returns the key pressed (255 = none).
+        Progress screen: a title, subtitle and progress bar over an optional
+        dimmed preview frame. Redraws are throttled unless `force`.
 
-        `preview` may be an image or a zero-argument callable returning one, so
-        callers can skip building it on frames that aren't redrawn.
+        Args:
+            preview: an image, or a zero-argument callable returning one (so the
+                caller only builds it when a redraw actually happens).
+
+        Returns:
+            The key pressed, or KEY_NONE.
         """
         now = time.perf_counter()
         if not force and now - self._last_progress_draw < _PROGRESS_REDRAW_S:
             return cv2.waitKey(1) & 0xFF
         self._last_progress_draw = now
 
-        if callable(preview):
-            preview = preview()
-        main = fit_to(preview, MAIN_W, MAIN_H)
-        main = (main * 0.3).astype(np.uint8)
+        main = _dimmed(preview() if callable(preview) else preview, _DIM_PROGRESS)
         cy = MAIN_H // 2
         _put_centered(main, title, cy - 40, 0.9, WHITE, 2)
         _put_centered(main, subtitle, cy - 5, 0.6, GREY, 1)
@@ -196,35 +236,31 @@ class LabelerUI:
         return self._show(main, 1)
 
     def show_frame(self, img, wait_ms, header=None):
-        """Show one playback frame in the main area; returns the key pressed."""
-        main = fit_to(img, MAIN_W, MAIN_H)
+        """Show one playback frame, waiting up to wait_ms; returns the key pressed."""
+        main = _fit(img, MAIN_W, MAIN_H)[0]
         if header:
             cv2.putText(main, header, (12, 24), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
         return self._show(main, wait_ms)
 
-    def show_message(self, lines, background=None, wait=True):
+    def show_message(self, lines, background=None):
         """
-        Centered message over an optional dimmed background. If `wait`, blocks
-        until a key is pressed and returns it.
+        Centered message over an optional dimmed background, shown until a key
+        is pressed. `lines` is a list of (text, colour); the first is the title.
+        Returns the key.
         """
-        main = (fit_to(background, MAIN_W, MAIN_H) * 0.25).astype(np.uint8)
+        main = _dimmed(background, _DIM_MESSAGE)
         y = MAIN_H // 2 - 18 * len(lines)
         for k, (text, color) in enumerate(lines):
             _put_centered(main, text, y, 0.8 if k == 0 else 0.55, color, 2 if k == 0 else 1)
             y += 45 if k == 0 else 30
-        if not wait:
-            return self._show(main, 1)
-        while True:
-            key = self._show(main, 50)
-            if key != 255:
-                return key
+        return self._wait_for_key(main)
 
     def ask_review(self, background, summary_lines, note=None):
         """
-        Pause on the review prompt over the last frame. Returns one of the
-        choice ids in REVIEW_OPTIONS.
+        The review prompt over the last frame: the detection summary and the
+        options in REVIEW_OPTIONS. Returns the chosen option's id.
         """
-        main = (fit_to(background, MAIN_W, MAIN_H) * 0.12).astype(np.uint8)
+        main = _dimmed(background, _DIM_PROMPT)
         y = 120
         _put_centered(main, "Was the detection successful?", y, 0.9, WHITE, 2)
         y += 40
@@ -243,6 +279,65 @@ class LabelerUI:
             choice = _REVIEW_KEYS.get(self._show(main, 50))
             if choice:
                 return choice
+
+    def pick_endpoints(self, frame, header, reason=None, previous=None):
+        """
+        Let the user click the rope endpoints on `frame`: first the far endpoint
+        (start of the walk), then the near endpoint (finish line). Backspace or U
+        undoes the last click, Enter confirms, Esc cancels.
+
+        Args:
+            frame: the video's first frame (the endpoints are in its pixels).
+            header: line shown at the top, e.g. the file name.
+            reason: optional line explaining why clicks are needed.
+            previous: optional (far, near) currently in use, drawn faintly.
+
+        Returns:
+            ((far_x, far_y), (near_x, near_y)) in frame pixels, or None if cancelled.
+        """
+        base, scale, ox, oy = _fit(frame, MAIN_W, MAIN_H)
+        fh, fw = frame.shape[:2]
+
+        def to_screen(p):
+            return (int(p[0] * scale + ox), int(p[1] * scale + oy))
+
+        prompts = ["Click the FAR endpoint (start of the walk)",
+                   "Click the NEAR endpoint (finish line)",
+                   "Enter = confirm"]
+        points = []
+        self._click = None
+        while True:
+            main = base.copy()
+            if previous is not None:
+                cv2.line(main, to_screen(previous[0]), to_screen(previous[1]), DIM, 1)
+                cv2.putText(main, "previous", to_screen(previous[0]), FONT, 0.45, DIM, 1, cv2.LINE_AA)
+            if len(points) == 2:
+                cv2.line(main, to_screen(points[0]), to_screen(points[1]), YELLOW, 2)
+            for p, color in zip(points, (BLUE, RED)):
+                cv2.circle(main, to_screen(p), 7, color, -1)
+
+            cv2.rectangle(main, (0, 0), (MAIN_W, 100 if reason else 76), (0, 0, 0), -1)
+            cv2.putText(main, header, (12, 24), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
+            y = 52
+            if reason:
+                cv2.putText(main, reason, (12, y), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
+                y += 24
+            cv2.putText(main, prompts[len(points)], (12, y), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
+            _put_centered(main, "Backspace / U = undo      Esc = cancel", MAIN_H - 16, 0.45, GREY, 1)
+
+            key = self._show(main, 30)
+            if self._click is not None:
+                cx, cy = self._click
+                self._click = None
+                fx, fy = (cx - ox) / scale, (cy - oy) / scale
+                if len(points) < 2 and cx < MAIN_W and 0 <= fx < fw and 0 <= fy < fh:
+                    points.append((int(round(fx)), int(round(fy))))
+            if key == KEY_ESC:
+                return None
+            if (key in KEY_BACKSPACE or key in (ord("u"), ord("U"))) and points:
+                points.pop()
+            if key in KEY_ENTER and len(points) == 2:
+                return points[0], points[1]
 
     def close(self):
         cv2.destroyWindow(WINDOW)

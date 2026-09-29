@@ -118,7 +118,7 @@ your input at review, **red** failed or rejected.
    | Key | Choice | What happens |
    |---|---|---|
    | `1` / Enter | Looks good | Outputs are saved and the video is marked approved. |
-   | `2` | Rope endpoints inaccurate | Click the far (start) and near (finish) endpoints. Timing is recomputed from the cached analysis and the video replays. |
+   | `2` | Rope endpoints inaccurate | Click the far (start) and near (finish) endpoints on the first frame, in the same window (Backspace undoes a click, Enter confirms, Esc cancels). Timing is recomputed from the cached analysis and the video replays. |
    | `3` | Walk start/stop inaccurate | The video replays in real time. Press Space when the walk starts and again when it ends. |
    | `4` | Body not detected | The file is skipped: no outputs are written, and it's reported as rejected. |
    | `R` | Replay | Play the video again. |
@@ -138,7 +138,8 @@ For each video, the labeler establishes two rope endpoints:
 
 If there's no single ArUco marker, or not exactly one person in the first frame,
 the video is marked orange during analysis. When its review comes up you click
-both endpoints, and a clicked far endpoint is treated as the start line.
+both endpoints in the main window, and a clicked far endpoint is treated as the
+start line. Everything happens in that one window; nothing opens a popup.
 
 ## Walk start detection
 
@@ -162,8 +163,9 @@ start is found by working backwards from it:
 
 Distances are perspective-corrected using the vanishing point of the subject's
 own walk (see `metric.py`). Ankle positions are projected onto the walking line
-first, so sideways sway does not read as forward movement. Tuning constants live
-at the top of the hindsight section in `metric.py`.
+first, so sideways sway does not read as forward movement. The detection and its
+tuning constants live in `onset.py`; `timing.py` combines it with the line
+crossings.
 
 When the far endpoint was clicked as a start line, the start is the moment the
 ankles cross it if the subject was standing behind it. If they were already on or
@@ -171,12 +173,13 @@ past the line when they started moving, it's their first foot movement, as above
 
 ## Output
 
-For each saved video (`<basename>` = filename without extension), three files
+For each saved video (`<basename>` = filename without extension), four files
 are written to `--output_dir`. Videos rejected at review get no outputs.
 
 | File                        | Contents                                                                                              |
 |-----------------------------|-------------------------------------------------------------------------------------------------------|
 | `<basename>.csv`            | Frame-by-frame body position, rope endpoints, normalized rope position (`t_along`), 33 pose landmarks.|
+| `<basename>_timing.json`    | The walk timing the labeler decided (start, end, duration, speed), how the start was found, and the review outcome. `view.py` reads it. |
 | `<basename>_annotated.mp4`  | Source frames with skeleton, rope, and info panel overlaid.                                           |
 | `<basename>_skeleton.mp4`   | Black canvas with skeleton, rope, and info panel only — de-identified for sharing.                    |
 
@@ -194,7 +197,9 @@ whether outputs were saved.
 ## Reviewing results
 
 The skeleton viewer plays back a saved CSV as a skeleton-only visualization —
-no video frames required.
+no video frames required. Its timer uses the `<basename>_timing.json` saved next
+to each CSV, so it shows exactly the timing approved at review. Older CSVs
+without that file fall back to the start-line and finish-line crossings.
 
 ```bash
 python view.py <csv_directory> [--no_content_crop]
@@ -210,24 +215,32 @@ Playback controls:
 |----------|----------------------------------------------|
 | Space    | Pause / resume                               |
 | ← / →    | Step back / forward one frame (while paused) |
-| `q`      | Quit / advance to next file                  |
+| `q`      | Next file (quits after the last one)         |
 
 ---
 
 ## Repository layout
 
 ```
-label.py             # Main labeler entry point (analyse, review, report)
-labeler_ui.py        # Batch window: progress, playback, review prompt, file sidebar
+label.py             # Entry point: CLI and the analyse -> review -> report batch driver
+job.py               # Data model: VideoJob (one per video) and FrameResult (one per frame)
+video_io.py          # Opening videos: first content frame, matte crop, playback clock
+matte.py             # Letterbox / pillarbox detection and the cropping capture wrapper
+endpoints.py         # Automatic rope endpoints (ArUco finish line, subject's start spot)
+analysis.py          # Phase 1: pose + ground tracking over every frame
+tracking.py          # Ground-plane optical-flow tracker (camera drift)
+metric.py            # Geometry: t_along and perspective-correct distance along the course
+onset.py             # Hindsight walk-start detection on distance signals
+timing.py            # Walk start/end from the analysed frames
+review.py            # Phase 2: real-time playback and the review flow
+labeler_ui.py        # The labeler's single window: progress, playback, clicks, prompt, sidebar
+annotate.py          # Frame drawing (skeleton, rope, info panel) shared with view.py
+data_export.py       # Per-video outputs (CSV, timing JSON, videos) and reading them back
 report.py            # End-of-run labeling report
-metric.py            # Perspective-correct distances and hindsight walk-start detection
-label_legacy.py      # Older two-click-only variant (kept for reference)
 view.py              # Skeleton-only playback of saved CSVs
-pose.py              # MediaPipe backend
+pose_backend.py      # Pose backend factory
+pose_common.py       # Shared 33-landmark pose layout, drawing and ankle helpers
+pose_mediapipe.py    # MediaPipe backend
 pose_mmpose.py       # MMPose backend
 pose_rtmlib.py       # RTMLib (ONNX Runtime) backend
-pose_backend.py      # Backend factory
-manual_selection.py  # Automatic endpoint detection and rope-endpoint click UI
-tracking.py          # Ground-plane optical-flow tracker
-data_export.py       # CSV writer
 ```

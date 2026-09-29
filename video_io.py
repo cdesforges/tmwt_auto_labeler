@@ -1,0 +1,109 @@
+"""
+Opening videos consistently.
+
+Every pass over a video (analysis, playback, saving) must see exactly the same
+frames in the same pixel space. probe_video works that out once — the first
+frame with picture content and the matte crop — and open_video reopens the
+video with those settings applied.
+"""
+
+import time
+from dataclasses import dataclass
+
+import cv2
+import numpy as np
+
+import matte
+
+# Frames darker than this mean pixel value are treated as leading black frames.
+BLACK_FRAME_MEAN = 10
+# Fallback frame rate when the container doesn't report one.
+DEFAULT_FPS = 30.0
+
+
+class VideoError(Exception):
+    """A video can't be used; the message is a short reason for the report."""
+
+
+@dataclass
+class VideoInfo:
+    """How to read one video: where its content starts and how to crop it."""
+    first_frame_idx: int     # index of the first non-black frame
+    crop: tuple              # (x, y, w, h) matte crop, or None for the full frame
+    fps: float
+    total_frames: int
+    first_frame: np.ndarray  # the first non-black frame, already cropped
+
+
+def open_video(path, crop=None, start_frame=0):
+    """Open `path` with `crop` applied to every frame, positioned at `start_frame`."""
+    cap = cv2.VideoCapture(path)
+    if crop is not None:
+        cap = matte.CroppingCapture(cap, crop)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    return cap
+
+
+def probe_video(path, matte_crop=True):
+    """
+    Find the first frame with content and (optionally) the matte crop.
+
+    Raises:
+        VideoError: if the video can't be opened or is entirely black.
+    """
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise VideoError("cannot open video")
+    try:
+        first_frame_idx, frame = _first_content_frame(cap)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    finally:
+        cap.release()
+    print(f"  First content frame: {first_frame_idx}")
+
+    crop = None
+    if matte_crop:
+        detected = matte.detect_content_crop(frame)
+        if matte.is_full_frame(detected, frame.shape):
+            print("  No matte detected — using full frame.")
+        else:
+            crop = detected
+            x, y, w, h = crop
+            print(f"  Matte detected — cropping to {w}x{h} at ({x},{y}) "
+                  f"from {frame.shape[1]}x{frame.shape[0]}.")
+            frame = frame[y:y + h, x:x + w]
+
+    fps = fps if fps and fps > 0 else DEFAULT_FPS
+    print(f"  FPS: {fps:.2f}, total frames: {total_frames}")
+    return VideoInfo(first_frame_idx, crop, fps, total_frames, frame)
+
+
+def _first_content_frame(cap):
+    """(index, frame) of the first frame that isn't (near-)black."""
+    idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            raise VideoError("all frames are black")
+        if frame.mean() >= BLACK_FRAME_MEAN:
+            return idx, frame
+        idx += 1
+
+
+class PlaybackClock:
+    """Paces playback to the video's own timestamps so it runs in real time."""
+
+    def __init__(self):
+        self._video_t0 = None
+        self._wall_t0 = None
+
+    def ms_until(self, time_s):
+        """Milliseconds to wait before showing the frame at video time `time_s`."""
+        if self._video_t0 is None:
+            self._video_t0, self._wall_t0 = time_s, time.perf_counter()
+        return (self._wall_t0 + (time_s - self._video_t0) - time.perf_counter()) * 1000.0
+
+    def restart(self):
+        """Re-anchor after a pause, so the next frame plays immediately."""
+        self._video_t0 = None

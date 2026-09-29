@@ -14,7 +14,6 @@ lines stay both low-variance and close to that seed color, stopping at the first
 line that carries real picture content.
 """
 
-import cv2
 import numpy as np
 
 # How far a pixel may sit from the matte's seed color (L1 across B,G,R) and

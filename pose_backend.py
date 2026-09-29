@@ -1,46 +1,37 @@
 """
 Pose backend factory.
 
-Returns the module implementing the pose API for a given backend name.
-All backends expose the same public interface (see pose.py for reference):
+Each backend module exposes the same small inference API:
 
   DEFAULT_MODEL_PATH: str
-  POSE_CONNECTIONS: list[tuple[int, int]]
-  LEFT_ANKLE_IDX, RIGHT_ANKLE_IDX, NOSE_IDX: int
-  FACE_IDXS: set[int]
+  create_landmarker(model_path, num_poses=1) -> landmarker   (streaming frames)
+  create_image_landmarker(model_path, num_poses=1) -> landmarker   (single images)
+  detect_poses(landmarker, frame_bgr, timestamp_ms) -> list[pose]
+  detect_poses_image(landmarker, frame_bgr) -> list[pose]
 
-  create_landmarker(model_path, num_poses=1) -> landmarker
-  create_image_landmarker(model_path, num_poses=1) -> landmarker
-  detect_poses(landmarker, frame_bgr, timestamp_ms) -> list[Pose]
-  detect_poses_image(landmarker, frame_bgr) -> list[Pose]
-  draw_pose(frame_bgr, pose_landmarks, ...) -> None
-  get_ankle_midpoint(pose_landmarks, frame_shape) -> (x, y) | None
+and every landmarker has close(). Poses are lists of 33 landmarks in the layout
+described in pose_common.py, which also holds the drawing and ankle helpers.
 """
 
-
-_BACKENDS = ("mediapipe", "mmpose", "rtmlib")
+BACKENDS = ("mediapipe", "mmpose", "rtmlib")
 
 
 def get_backend(name):
     """
-    Return the pose backend module for `name`.
-
-    Args:
-        name: one of "mediapipe", "mmpose", "rtmlib".
+    Return the pose backend module for `name`. Backends are imported lazily, so
+    only the chosen one's dependencies need to be installed.
 
     Raises:
         ValueError: if `name` is not a known backend.
         ImportError: if the backend module's dependencies are missing.
     """
     if name == "mediapipe":
-        import pose
-        return pose
+        import pose_mediapipe
+        return pose_mediapipe
     if name == "mmpose":
         import pose_mmpose
         return pose_mmpose
     if name == "rtmlib":
         import pose_rtmlib
         return pose_rtmlib
-    raise ValueError(
-        f"Unknown pose backend: {name!r}. Use one of {_BACKENDS}."
-    )
+    raise ValueError(f"Unknown pose backend: {name!r}. Use one of {BACKENDS}.")

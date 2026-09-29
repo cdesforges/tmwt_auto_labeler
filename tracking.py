@@ -1,9 +1,12 @@
 """
 Ground-plane tracking via optical flow and homography.
 
-Uses Lucas-Kanade optical flow on ground features to estimate
-a homography matrix each frame. This lets us track where the
-rope endpoints have moved as the camera shifts.
+Hand-held or bumped cameras move during a recording. GroundTracker follows
+features on the floor with Lucas-Kanade optical flow and fits a homography from
+the first (reference) frame to each later frame. The rope endpoints are chosen
+in the reference frame and mapped into every frame with transform_points; the
+subject's positions are mapped back with to_reference_frame so the whole walk
+is measured in one consistent frame.
 """
 
 import cv2
@@ -54,9 +57,8 @@ class GroundTracker:
     """
     Tracks ground-plane features across frames using optical flow.
 
-    Computes a homography from the initial frame's feature positions
-    to the current frame, then uses it to transform arbitrary points
-    (like rope endpoints) from initial-frame coords to current-frame coords.
+    Each update() returns the homography from the first frame's feature
+    positions to the current frame's.
     """
 
     def __init__(self, first_frame_bgr):
@@ -104,22 +106,47 @@ class GroundTracker:
         self.old_gray = frame_gray.copy()
         return H
 
-    @staticmethod
-    def transform_points(H, points):
-        """
-        Apply a homography to a list of (x, y) points.
 
-        Args:
-            H: 3x3 homography matrix.
-            points: List of (x, y) tuples to transform.
+def transform_points(H, points):
+    """
+    Map reference-frame (first-frame) pixel points into the current frame.
 
-        Returns:
-            List of (x, y) tuples in the new coordinate frame.
-            Returns the original points unchanged if H is None.
-        """
-        if H is None:
-            return list(points)
+    Args:
+        H: 3x3 reference -> current homography from GroundTracker.update, or
+           None if tracking failed (points are then returned unchanged).
+        points: list of (x, y) points.
 
-        pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
-        transformed = cv2.perspectiveTransform(pts, H)
-        return [(int(p[0][0]), int(p[0][1])) for p in transformed]
+    Returns:
+        List of integer (x, y) tuples, ready for drawing.
+    """
+    if H is None:
+        return [tuple(p) for p in points]
+    pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    transformed = cv2.perspectiveTransform(pts, H)
+    return [(int(p[0][0]), int(p[0][1])) for p in transformed]
+
+
+def to_reference_frame(H, points):
+    """
+    Map current-frame pixel points back into reference-frame coordinates.
+
+    Keeping the walk track in one consistent frame means camera drift doesn't
+    corrupt the vanishing-point fit or the distance measurements.
+
+    Args:
+        H: 3x3 reference -> current homography, or None (points are then
+           returned unchanged).
+        points: list of (x, y) points.
+
+    Returns:
+        List of float (x, y) tuples.
+    """
+    if H is None:
+        return list(points)
+    try:
+        H_inv = np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        return list(points)
+    pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    out = cv2.perspectiveTransform(pts, H_inv)
+    return [(float(p[0][0]), float(p[0][1])) for p in out]

@@ -1,117 +1,202 @@
 """
-Data export for per-frame tracking data.
+Per-video outputs, and reading them back (view.py).
 
-Saves frame-by-frame position data to CSV for later analysis.
-Each row contains the frame index, timestamp, body position,
-rope endpoint positions, the normalized t-value along the rope,
-and all 33 MediaPipe pose landmarks (normalized x, y, z).
+For each saved video, next to <basename>.csv:
 
-Landmark coordinates are stored in normalized [0-1] form (as MediaPipe
-returns them). To convert back to pixels, multiply x by frame width
-and y by frame height. z represents depth relative to the hip midpoint.
+  <basename>.csv            one row per frame: timestamp, body point, rope
+                            endpoints, t_along and all 33 pose landmarks. It
+                            holds no image data, so it is de-identified.
+  <basename>_timing.json    the walk timing decided by the labeler (start, end,
+                            duration, how it was found, review outcome).
+  <basename>_annotated.mp4  the video with skeleton, rope and info panel.
+  <basename>_skeleton.mp4   the same annotations on a black canvas (de-identified).
+
+Landmark coordinates are normalized (0-1): multiply x by frame_w and y by
+frame_h for pixels. z is backend-specific depth (0 for COCO-17 backends).
 """
 
 import csv
+import json
 import os
 
-# Number of MediaPipe pose landmarks
-NUM_LANDMARKS = 33
+import cv2
 
-# Build CSV column headers:
-#   Core columns + 33 landmarks * 3 values each (x, y, z)
-HEADERS = [
-    "frame",            # Frame index (0-based)
-    "time_s",           # Timestamp in seconds
-    "frame_w",          # Frame width in pixels (for denormalizing landmarks)
-    "frame_h",          # Frame height in pixels (for denormalizing landmarks)
-    "body_x",           # Ankle midpoint X (pixels)
-    "body_y",           # Ankle midpoint Y (pixels)
-    "far_ep_x",         # Far rope endpoint X (pixels)
-    "far_ep_y",         # Far rope endpoint Y (pixels)
-    "near_ep_x",        # Near rope endpoint X (pixels)
-    "near_ep_y",        # Near rope endpoint Y (pixels)
-    "t_along",          # Normalized position along rope (0=far, 1=near)
+import annotate
+import pose_common
+from job import COURSE_M
+
+# Suffixes of the output files, appended to the CSV's basename.
+TIMING_SUFFIX = "_timing.json"
+ANNOTATED_SUFFIX = "_annotated.mp4"
+SKELETON_SUFFIX = "_skeleton.mp4"
+
+CORE_COLUMNS = [
+    "frame",            # frame index (0 = first content frame)
+    "time_s",           # timestamp in seconds
+    "frame_w",          # frame width in pixels (for denormalizing landmarks)
+    "frame_h",          # frame height in pixels
+    "body_x",           # ankle midpoint X (pixels)
+    "body_y",           # ankle midpoint Y (pixels)
+    "far_ep_x",         # far rope endpoint X (pixels, this frame)
+    "far_ep_y",         # far rope endpoint Y
+    "near_ep_x",        # near rope endpoint X
+    "near_ep_y",        # near rope endpoint Y
+    "t_along",          # position along the rope (0 = far, 1 = near)
 ]
-
-# Add landmark columns: lm_00_x, lm_00_y, lm_00_z, lm_01_x, ...
-for i in range(NUM_LANDMARKS):
-    HEADERS.append(f"lm_{i:02d}_x")
-    HEADERS.append(f"lm_{i:02d}_y")
-    HEADERS.append(f"lm_{i:02d}_z")
+HEADERS = CORE_COLUMNS + [f"lm_{i:02d}_{axis}"
+                          for i in range(pose_common.NUM_LANDMARKS)
+                          for axis in ("x", "y", "z")]
 
 
-class FrameDataRecorder:
+def output_paths(csv_path):
+    """(timing, annotated, skeleton) paths belonging to a CSV output path."""
+    base = os.path.splitext(csv_path)[0]
+    return base + TIMING_SUFFIX, base + ANNOTATED_SUFFIX, base + SKELETON_SUFFIX
+
+
+# --- CSV -----------------------------------------------------------------------
+
+def _csv_row(result, frame_w, frame_h):
+    def xy(pt, i):
+        return pt[i] if pt is not None else ""
+
+    row = {
+        "frame": result.frame_idx,
+        "time_s": round(result.time_s, 4),
+        "frame_w": frame_w,
+        "frame_h": frame_h,
+        "body_x": xy(result.body_px, 0),
+        "body_y": xy(result.body_px, 1),
+        "far_ep_x": xy(result.far_ep, 0),
+        "far_ep_y": xy(result.far_ep, 1),
+        "near_ep_x": xy(result.near_ep, 0),
+        "near_ep_y": xy(result.near_ep, 1),
+        "t_along": round(result.t_along, 6) if result.t_along is not None else "",
+    }
+    pose = result.pose or [None] * pose_common.NUM_LANDMARKS
+    for i in range(pose_common.NUM_LANDMARKS):
+        lm = pose[i] if i < len(pose) else None
+        for axis in ("x", "y", "z"):
+            row[f"lm_{i:02d}_{axis}"] = round(getattr(lm, axis), 6) if lm is not None else ""
+    return row
+
+
+def write_frames_csv(path, frames, frame_w, frame_h):
+    """Write one CSV row per job.FrameResult."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=HEADERS)
+        writer.writeheader()
+        writer.writerows(_csv_row(r, frame_w, frame_h) for r in frames)
+    print(f"  Saved {len(frames)} frames to {path}")
+
+
+def read_frames_csv(path):
     """
-    Collects per-frame tracking data and writes it to a CSV file.
+    Read a CSV written by write_frames_csv.
 
-    Usage:
-        recorder = FrameDataRecorder(frame_w=1920, frame_h=1080)
-        recorder.add_frame(frame_idx=0, time_s=0.0, body_px=(100, 200), ...)
-        recorder.save("output.csv")
+    Returns:
+        One dict per row: numeric fields as floats, empty fields as None.
     """
+    def parse(value):
+        if value == "":
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return value
 
-    def __init__(self, frame_w, frame_h):
-        """
-        Args:
-            frame_w: Video frame width in pixels.
-            frame_h: Video frame height in pixels.
-        """
-        self.frame_w = frame_w
-        self.frame_h = frame_h
-        self.rows = []
+    with open(path, "r", newline="") as f:
+        return [{k: parse(v) for k, v in row.items()} for row in csv.DictReader(f)]
 
-    def add_frame(self, frame_idx, time_s, body_px, far_ep, near_ep, t_along, pose_landmarks=None):
-        """
-        Record data for a single frame.
 
-        Args:
-            frame_idx: Frame number (0-based).
-            time_s: Timestamp in seconds.
-            body_px: (x, y) ankle midpoint in pixels, or None if no pose.
-            far_ep: (x, y) far rope endpoint in pixels.
-            near_ep: (x, y) near rope endpoint in pixels.
-            t_along: Normalized position along the rope (0=far, 1=near), or None.
-            pose_landmarks: List of 33 MediaPipe landmarks with .x, .y, .z, or None.
-        """
-        row = {
-            "frame": frame_idx,
-            "time_s": round(time_s, 4),
-            "frame_w": self.frame_w,
-            "frame_h": self.frame_h,
-            "body_x": body_px[0] if body_px else "",
-            "body_y": body_px[1] if body_px else "",
-            "far_ep_x": far_ep[0] if far_ep else "",
-            "far_ep_y": far_ep[1] if far_ep else "",
-            "near_ep_x": near_ep[0] if near_ep else "",
-            "near_ep_y": near_ep[1] if near_ep else "",
-            "t_along": round(t_along, 6) if t_along is not None else "",
-        }
+def row_point(row, prefix):
+    """Integer (x, y) from a row's <prefix>_x / <prefix>_y columns, or None."""
+    x, y = row.get(f"{prefix}_x"), row.get(f"{prefix}_y")
+    return None if x is None or y is None else (int(x), int(y))
 
-        # Add all 33 landmark positions (normalized).
-        # Some backends (e.g. mmpose) leave unmapped slots as None.
-        for i in range(NUM_LANDMARKS):
-            lm = pose_landmarks[i] if (pose_landmarks and i < len(pose_landmarks)) else None
-            if lm is not None:
-                row[f"lm_{i:02d}_x"] = round(lm.x, 6)
-                row[f"lm_{i:02d}_y"] = round(lm.y, 6)
-                row[f"lm_{i:02d}_z"] = round(lm.z, 6)
-            else:
-                row[f"lm_{i:02d}_x"] = ""
-                row[f"lm_{i:02d}_y"] = ""
-                row[f"lm_{i:02d}_z"] = ""
 
-        self.rows.append(row)
+def row_pose(row):
+    """A row's landmarks as a 33-entry pose (pose_common layout), or None if empty."""
+    pose = []
+    for i in range(pose_common.NUM_LANDMARKS):
+        x, y = row.get(f"lm_{i:02d}_x"), row.get(f"lm_{i:02d}_y")
+        z = row.get(f"lm_{i:02d}_z") or 0.0
+        pose.append(pose_common.Landmark(x, y, z) if x is not None and y is not None else None)
+    return pose if any(lm is not None for lm in pose) else None
 
-    def save(self, output_path):
-        """
-        Write all recorded data to a CSV file.
 
-        Args:
-            output_path: Path to the output .csv file.
-        """
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        with open(output_path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=HEADERS)
-            writer.writeheader()
-            writer.writerows(self.rows)
-        print(f"  Saved {len(self.rows)} frames to {output_path}")
+# --- Timing --------------------------------------------------------------------
+
+def write_timing(job):
+    """Write the job's walk timing and review outcome to <basename>_timing.json."""
+    path = output_paths(job.output_path)[0]
+    data = {
+        "video": job.name,
+        "course_m": COURSE_M,
+        "walk_start_s": job.walk_start,
+        "walk_end_s": job.walk_end,
+        "duration_s": job.duration,
+        "speed_mps": job.speed,
+        "endpoints": job.endpoint_source,
+        "timing": job.timing_source,
+        "start_method": job.timing_detail,
+        "review": job.review,
+    }
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def read_timing(csv_path):
+    """The timing saved next to a CSV, as a dict, or None if there isn't one."""
+    path = output_paths(csv_path)[0]
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+# --- Saving a job --------------------------------------------------------------
+
+def save_job(job, on_progress=None):
+    """
+    Write all of a job's outputs (CSV, timing, annotated and skeleton videos)
+    from its cached analysis. on_progress(fraction) is called per frame.
+    """
+    h, w = job.info.first_frame.shape[:2]
+    _, annotated_path, skeleton_path = output_paths(job.output_path)
+    os.makedirs(os.path.dirname(annotated_path) or ".", exist_ok=True)
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    size = (w + annotate.PANEL_W, h)
+    writers = []
+    for path in (annotated_path, skeleton_path):
+        writer = cv2.VideoWriter(path, fourcc, job.info.fps, size)
+        if writer.isOpened():
+            writers.append(writer)
+        else:
+            print(f"  WARNING: could not open video writer at {path}")
+            writers.append(None)
+
+    cap = job.open_capture()
+    try:
+        for k, result in enumerate(job.frames):
+            ret, frame_bgr = cap.read()
+            if ret:
+                annotated, skeleton = annotate.render_frame(
+                    frame_bgr, result, job.walk_start, job.walk_end, with_skeleton=True)
+                for writer, img in zip(writers, (annotated, skeleton)):
+                    if writer is not None:
+                        writer.write(img)
+            if on_progress is not None:
+                on_progress((k + 1) / len(job.frames))
+    finally:
+        cap.release()
+        for writer in writers:
+            if writer is not None:
+                writer.release()
+
+    write_frames_csv(job.output_path, job.frames, w, h)
+    write_timing(job)
+    print(f"  Videos: {annotated_path}\n          {skeleton_path}")
+    job.saved = True
