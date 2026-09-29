@@ -10,6 +10,7 @@ import numpy as np
 from tmwt.pose import pose_common
 from tmwt.core.job import COURSE_M
 from tmwt.detection import pose_check
+from tmwt.ui.widgets import truncate
 
 # Width (px) of the info panel placed to the right of each frame.
 PANEL_W = 300
@@ -71,6 +72,8 @@ def draw_info_panel(height, time_s, frame_idx, t_along, walk_start, walk_end,
     y = 40
 
     def text(s, pos_y, scale, color, thickness=1, x=x0):
+        # Shortened with "..." rather than drawn past the panel's edge.
+        s = truncate(s, PANEL_W - x - 4, scale, thickness)
         cv2.putText(panel, s, (x, pos_y), FONT, scale, color, thickness)
 
     def rule(pos_y):
@@ -128,15 +131,24 @@ def draw_info_panel(height, time_s, frame_idx, t_along, walk_start, walk_end,
     if model_strength:
         text(f"Model strength:  {model_strength}", y, 0.45, _INFO)
         y += 22
+    # The flag lists stop above the controls line at the bottom, ending with
+    # "+N more" when they don't all fit.
+    bottom = height - 30
     for names, heading, color in ((flagged, "Pose check (orange):", _ORANGE),
                                   (smoothed, "Smoothed (yellow):", _SMOOTHED)):
-        if names:
-            y += 8
-            text(heading, y, 0.45, color)
-            for name in names:
+        if not names or y + 8 + 20 > bottom:
+            continue
+        y += 8
+        text(heading, y, 0.45, color)
+        for n, name in enumerate(names):
+            left = len(names) - n
+            if y + 40 > bottom and left > 1:     # room for one more line: say how many are left
                 y += 20
-                text(f"  {name.replace('_', ' ')}", y, 0.42, color)
-            y += 22
+                text(f"  +{left} more", y, 0.42, color)
+                break
+            y += 20
+            text(f"  {name.replace('_', ' ')}", y, 0.42, color)
+        y += 22
 
     text(controls, height - 15, 0.4, _RULE)
     return panel

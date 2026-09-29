@@ -191,7 +191,8 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
 
 The **top bar** is always there: an **X** at the top left, then (during a
 review) a **save** button (floppy disk); the folder's name in the middle
-(shortened in the middle if it's long); the RNA Institute logo at the right.
+(shortened in the middle if it's long); the University of Rochester shield
+and the RNA Institute rosette at the right.
 
 - **Save** (floppy disk): save your review progress and quit, from any screen.
 - **X**: quit. During a review it asks first: **Save progress & quit**, **Quit
@@ -545,7 +546,7 @@ view.py                   # Skeleton-only playback of saved CSVs
 
 media/                    # Input videos (not tracked by git)
 models/                   # MediaPipe model file (the default --model path)
-assets/                   # ArUco marker specification; RNA Institute logo for the top bar
+assets/                   # ArUco marker specification; the top bar's UR shield and RNA rosette
 tests/                    # Unit tests (see Testing below)
 runs/                     # Output folders from earlier runs (data, not code)
 
@@ -589,7 +590,7 @@ tmwt/
     labeler_ui.py         #   LabelerUI(PickerScreens, BaseWindow): progress, playback frame, menus
     events.py             #   Leaving a screen: JumpTo, and the UserQuit family (window closed, save / quit)
     panel.py              #   Panel: a region of the window (base of the top bar and sidebar)
-    top_bar.py            #   Top bar: quit and save buttons, folder title, logo
+    top_bar.py            #   Top bar: quit and save buttons, folder title, logos
     sidebar.py            #   Sidebar: the colour-coded file list, its states and marks
     widgets.py            #   Colours, key codes, buttons (Button and subclasses), icons, tooltips, badges
     seek_bar.py           #   SeekBar: scrubbing and draggable marks

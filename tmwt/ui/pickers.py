@@ -10,7 +10,7 @@ import cv2
 
 from tmwt.pose import pose_common
 from tmwt.ui.base_window import HANDLE_RADIUS
-from tmwt.ui.widgets import (BLUE, CONFIRM, FONT, HEADER_H, KEY_ESC, ORANGE, RED,
+from tmwt.ui.widgets import (BLUE, CONFIRM, FONT, HEADER_H, KEY_ESC, MAIN_W, ORANGE, RED, truncate,
                              WHITE, YELLOW, bar_buttons, frame_screen)
 
 # People on the "pick the walker" screen: everyone blue, the one under the
@@ -148,7 +148,8 @@ class PickerScreens:
                     cv2.putText(main, label, (sp[0] + 10, sp[1] - 8), FONT, 0.5, color, 2, cv2.LINE_AA)
             y = 32
             if reason:
-                cv2.putText(main, reason, (16, y), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
+                cv2.putText(main, truncate(reason, MAIN_W - 32, 0.55), (16, y), FONT, 0.55, ORANGE, 1,
+                            cv2.LINE_AA)
                 y += 30
             cv2.putText(main, state.prompt(), (16, y), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
 
@@ -201,7 +202,8 @@ class PickerScreens:
                 x0, y0 = int(boxes[k][0]), int(boxes[k][1])
                 cv2.putText(img, str(k + 1), (x0, max(y0, 20)), FONT, 0.5 * weight, color, weight, cv2.LINE_AA)
             main, scale, ox, oy = frame_screen(img, top=HEADER_H)
-            cv2.putText(main, reason, (16, 32), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
+            cv2.putText(main, truncate(reason, MAIN_W - 32, 0.55), (16, 32), FONT, 0.55, ORANGE, 1,
+                        cv2.LINE_AA)
             prompt = ("Click the person doing the walk test" if selected is None
                       else f"Person {selected + 1} chosen (green): Confirm, or click someone else")
             cv2.putText(main, prompt, (16, 62), FONT, 0.65, WHITE, 2, cv2.LINE_AA)

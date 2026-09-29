@@ -46,6 +46,23 @@ CANVAS_W, CANVAS_H = MAIN_W + SIDEBAR_W, TOPBAR_H + MAIN_H
 
 # Brightness of a background frame behind a message.
 DIM_MESSAGE = 0.25
+# Text (scale, thickness) of a message's title and its other lines.
+MESSAGE_TITLE = (0.8, 2)
+MESSAGE_LINE = (0.55, 1)
+
+
+def message_layout(n_lines):
+    """
+    Where show_message puts things (main-area pixels): the baseline of each of
+    its `n_lines` lines (the first is the title) and the top of its button
+    row. The block is centred vertically.
+    """
+    y = MAIN_H // 2 - 18 * n_lines - 30
+    baselines = []
+    for k in range(n_lines):
+        baselines.append(y)
+        y += 45 if k == 0 else 30
+    return baselines, y + 20
 # Drag kind for a screen's draggable points (see _handle_input's `handles`),
 # and how close (main-area pixels) a press must be to grab one.
 POINT = "point"
@@ -360,11 +377,11 @@ class BaseWindow:
         is the title. Returns the chosen button's value.
         """
         main = dimmed(background, dim)
-        y = MAIN_H // 2 - 18 * len(lines) - 30
-        for k, (text, color) in enumerate(lines):
-            put_centered(main, text, y, 0.8 if k == 0 else 0.55, color, 2 if k == 0 else 1)
-            y += 45 if k == 0 else 30
-        return self._wait_for_choice(main, button_row(specs, y + 20))
+        baselines, buttons_y = message_layout(len(lines))
+        for k, ((text, color), y) in enumerate(zip(lines, baselines)):
+            scale, thickness = MESSAGE_TITLE if k == 0 else MESSAGE_LINE
+            put_centered(main, text, y, scale, color, thickness)
+        return self._wait_for_choice(main, button_row(specs, buttons_y))
 
     def confirm(self, title, lines, yes, no="Go back", background=None):
         """

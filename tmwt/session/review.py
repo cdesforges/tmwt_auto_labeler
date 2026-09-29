@@ -70,7 +70,7 @@ def review_job(job, ui, i):
     if job.status == STATUS_NO_BODY:
         ui.show_message([
             ("No body detected", ORANGE),
-            (f"{job.name}: no person was found in any frame of this video.", GREY),
+            ("No person was found in any frame of this video.", GREY),
         ], [("Skip this file", "skip", KEY_ENTER + (KEY_ESC,))], background=job.info.first_frame)
         _reject(job, ui, i, "no body detected")
         return None

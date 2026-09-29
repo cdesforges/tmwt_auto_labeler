@@ -10,6 +10,7 @@ are built in session/review.py.
 """
 
 import time
+from collections import namedtuple
 
 import cv2
 import numpy as np
@@ -20,6 +21,34 @@ from tmwt.ui.seek_bar import SEEK_H
 from tmwt.ui.widgets import (BAR_H, BTN_H, GREY, KEY_ESC, MAIN_H, MAIN_W, ORANGE, RED, WHITE, YELLOW,
                              KeyedButton, bar_buttons, button_row, dimmed, draw_badge, frame_screen,
                              put_centered)
+
+# ask_menu's text (scale, thickness) and button width, and its layout.
+MENU_TITLE = (0.9, 2)
+MENU_LINE = (0.55, 1)
+MENU_BUTTON_W = 560
+MenuLayout = namedtuple("MenuLayout", "title lines options note")
+
+
+def menu_layout(n_lines, n_options):
+    """
+    Where ask_menu puts things (main-area pixels): the title's baseline, each
+    line's baseline, each option button's top, and the note's baseline.
+    Menus with many options start higher.
+    """
+    y = 120 - 12 * max(0, n_options - 5)
+    title = y
+    y += 40
+    lines = []
+    for _ in range(n_lines):
+        lines.append(y)
+        y += 26
+    y += 16
+    options = []
+    for _ in range(n_options):
+        options.append(y)
+        y += BTN_H + 10
+    return MenuLayout(title, lines, options, y + 18)
+
 
 # Minimum interval between progress redraws, so drawing never slows analysis.
 _PROGRESS_REDRAW_S = 0.07
@@ -136,20 +165,13 @@ class LabelerUI(PickerScreens, BaseWindow):
         option's value.
         """
         main = dimmed(background, _DIM_PROMPT)
-        y = 120 - 12 * max(0, len(options) - 5)
-        put_centered(main, title, y, 0.9, WHITE, 2)
-        y += 40
-        for text in lines:
-            put_centered(main, text, y, 0.55, GREY, 1)
-            y += 26
-        y += 16
-
-        btn_w, gap = 560, 10
-        buttons = []
-        for key_label, text, value, keys in options:
-            buttons.append(KeyedButton(((MAIN_W - btn_w) // 2, y, btn_w, BTN_H), text, value,
-                                       keys, key_label=f"[{key_label}]"))
-            y += BTN_H + gap
+        layout = menu_layout(len(lines), len(options))
+        put_centered(main, title, layout.title, MENU_TITLE[0], WHITE, MENU_TITLE[1])
+        for text, y in zip(lines, layout.lines):
+            put_centered(main, text, y, MENU_LINE[0], GREY, MENU_LINE[1])
+        buttons = [KeyedButton(((MAIN_W - MENU_BUTTON_W) // 2, y, MENU_BUTTON_W, BTN_H), text, value,
+                               keys, key_label=f"[{key_label}]")
+                   for (key_label, text, value, keys), y in zip(options, layout.options)]
         if note:
-            put_centered(main, note, y + 18, 0.55, ORANGE, 1)
+            put_centered(main, note, layout.note, MENU_LINE[0], ORANGE, MENU_LINE[1])
         return self._wait_for_choice(main, buttons)

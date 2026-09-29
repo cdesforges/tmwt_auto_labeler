@@ -10,6 +10,7 @@ import unittest
 import cv2
 import numpy as np
 
+from tmwt.ui import top_bar
 from tmwt.ui.top_bar import (TOPBAR_H, TopBar, _TITLE_SCALE, _TITLE_THICKNESS, fit_title,
                              folder_title)
 from tmwt.ui.widgets import FONT, ascii_text, truncate_middle
@@ -109,7 +110,7 @@ class TopBarLayoutTest(unittest.TestCase):
         self.assertIsNotNone(box)
         left_edge = bar.save_button.x + bar.save_button.w
         self.assertGreaterEqual(box[0] - left_edge, 20)
-        logo_left = bar.w - 8 - bar._logo[0].shape[1] if bar._logo else bar.w
+        logo_left = bar.w - top_bar._LOGO_MARGIN - bar.logos_width() if bar.shown_logos() else bar.w
         self.assertGreaterEqual(logo_left - box[1], 20)
 
     def test_render_size(self):
@@ -132,8 +133,8 @@ class TopBarLayoutTest(unittest.TestCase):
         self.assertEqual(bar.render(None, None).shape, (TOPBAR_H, 300, 3))
 
     def test_missing_logo(self):
-        bar = TopBar(self.WIDTH, "control_vids", logo_path="does/not/exist.png")
-        self.assertIsNone(bar._logo)
+        bar = TopBar(self.WIDTH, "control_vids", logo_paths=("does/not/exist.png",))
+        self.assertEqual(bar._logos, [])
         self.assert_title_clear_of_controls(bar, "x" * 400)
 
     def test_save_button_only_during_review(self):
@@ -157,3 +158,44 @@ class TopBarLayoutTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LogosTest(unittest.TestCase):
+    """Several logos at the right of the bar."""
+
+    def test_default_logos_are_both_there(self):
+        from tmwt.ui import top_bar
+        self.assertEqual(len(TopBar(1280)._logos), len(top_bar.LOGO_PATHS))
+        self.assertEqual(top_bar.LOGO_PATHS, (top_bar.UR_LOGO_PATH, top_bar.RNA_LOGO_PATH))   # UR, then RNA
+
+    def test_logos_width_counts_the_gaps(self):
+        bar = TopBar(1280)
+        widths = sum(bgr.shape[1] for bgr, _ in bar._logos)
+        self.assertEqual(bar.logos_width(), widths + top_bar._LOGO_GAP * (len(bar._logos) - 1))
+        self.assertEqual(TopBar(1280, logo_paths=())._logos, [])
+        self.assertEqual(TopBar(1280, logo_paths=()).logos_width(), 0)
+
+    def test_logos_fit_inside_the_bar(self):
+        bar = TopBar(1280, "control_vids")
+        img = bar.render(None, None)
+        self.assertEqual(img.shape, (TOPBAR_H, 1280, 3))
+        right = img[:, 1280 - top_bar._LOGO_MARGIN - bar.logos_width():1280 - top_bar._LOGO_MARGIN]
+        self.assertTrue((right > 150).any())                   # the logos are drawn there
+        # nothing in the right margin (above the bar's bottom border)
+        self.assertFalse((img[:-1, 1280 - top_bar._LOGO_MARGIN:] > 60).any())
+
+    def test_space_around_the_logos(self):
+        bar = TopBar(1280, "control_vids")
+        img = bar.render(None, None)
+        plain = TopBar(1280, "control_vids", logo_paths=()).render(None, None)
+        drawn = (img != plain).any(axis=2)
+        rows, cols = np.where(drawn)
+        self.assertGreaterEqual(rows.min(), 8)                             # room above
+        self.assertLessEqual(rows.max(), TOPBAR_H - 1 - 8)                 # and below
+        self.assertLessEqual(cols.max(), 1280 - top_bar._LOGO_MARGIN)      # and at the right
+        self.assertGreaterEqual(top_bar._LOGO_GAP, 20)                     # and between them
+
+    def test_a_missing_logo_is_left_out(self):
+        from tmwt.ui import top_bar
+        bar = TopBar(1280, logo_paths=(top_bar.RNA_LOGO_PATH, "missing.png"))
+        self.assertEqual(len(bar._logos), 1)

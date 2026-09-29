@@ -58,10 +58,22 @@ _ROW_MARGIN = 8          # least space between a button row and the main area's 
 
 # --- Text and image helpers ----------------------------------------------------
 
+# Least space between centred text and the image's sides.
+TEXT_MARGIN = 10
+
+
 def put_centered(img, text, y, scale, color, thickness=1):
-    """Draw `text` horizontally centred on `img` at baseline y."""
+    """
+    Draw `text` horizontally centred on `img` at baseline y. Text wider than
+    the image (less TEXT_MARGIN each side) is drawn smaller to fit, never
+    past the edges.
+    """
     (tw, _), _ = cv2.getTextSize(text, FONT, scale, thickness)
-    x = max(10, (img.shape[1] - tw) // 2)
+    room = img.shape[1] - 2 * TEXT_MARGIN
+    if tw > room:
+        scale *= room / tw
+        (tw, _), _ = cv2.getTextSize(text, FONT, scale, thickness)
+    x = max(TEXT_MARGIN, (img.shape[1] - tw) // 2)
     cv2.putText(img, text, (x, y), FONT, scale, color, thickness, cv2.LINE_AA)
 
 
