@@ -210,7 +210,9 @@ review) a **save** button (floppy disk); the folder's name in the middle
    **Correcting the timing while you watch:** pause, then mark the start or
    stop again with the dot buttons, or drag a mark along the seek bar by the
    small tab under it (the picture follows, and the playhead hides while you
-   drag so you can see where the mark will land). Pressing the track itself
+   drag so you can see where the mark will land). When the frame on screen is
+   a mark's frame, the playhead fills with that mark's colour (green or red,
+   inside a white rim), so you can land on it exactly. Pressing the track itself
    always scrubs, even where a mark is. Changed marks are shown at the top
    left (a stop before the start is flagged in red), and when you go on to
    the review prompt they replace the automatic timing (it becomes manual).

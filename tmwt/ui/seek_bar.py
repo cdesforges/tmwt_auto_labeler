@@ -8,6 +8,8 @@ The seek bar shown under playback (LabelerUI.show_frame):
 
   - Press on the track (anywhere but a tab) and drag to scrub; the playhead
     follows the pointer.
+  - When the frame on screen is a mark's frame, the playhead is filled with the
+    mark's colour (keeping its white outline).
   - Marks with an id are draggable by the tab under the track. While one is
     dragged, the playhead is hidden, so the mark's new place is clear. Marks
     are grabbed by their tabs rather than their lines because right after
@@ -31,6 +33,11 @@ SEEK_H = 34
 # A mark on the bar: where (0-1), its colour, and an id if it can be dragged
 # (None for a fixed mark).
 Marker = namedtuple("Marker", "fraction color id")
+
+# Everything the bar shows (LabelerUI.show_frame's `seek`): the playhead (0-1),
+# [Marker], the text at the bar's right (e.g. the time), and the colour to fill
+# the playhead with (that of a mark on the frame on screen), or None.
+SeekState = namedtuple("SeekState", "fraction markers text playhead_fill", defaults=(None,))
 
 # Drag kinds (SeekBar.grab): scrubbing, or moving a mark.
 SCRUB = "scrub"
@@ -77,18 +84,17 @@ class SeekBar:
             return SCRUB, None
         return None
 
-    def draw(self, img, fraction, markers, text, hover=None, drag=None, drag_fraction=None):
+    def draw(self, img, state, hover=None, drag=None, drag_fraction=None):
         """
         Draw the bar.
 
         Args:
-            fraction: the playhead (0-1).
-            markers: [Marker].
-            text: shown at the bar's right (e.g. the time).
+            state: a SeekState.
             hover: what the pointer is over (as grab() returns), for highlights.
             drag: what's being dragged (as grab() returns), or None.
             drag_fraction: where the pointer is along the bar while dragging.
         """
+        fraction, markers, text, fill = state
         y = self.Y
         dragging_mark = drag is not None and drag[0] == MARK
         if drag is not None and drag[0] == SCRUB:
@@ -109,7 +115,10 @@ class SeekBar:
         # The playhead, hidden while a mark is dragged so its drop point is clear.
         if not dragging_mark:
             big = drag is not None or hover == (SCRUB, None)
-            cv2.circle(img, (x, y), 9 if big else 7, WHITE, -1, cv2.LINE_AA)
+            r = 9 if big else 7
+            cv2.circle(img, (x, y), r, WHITE, -1, cv2.LINE_AA)
+            if fill is not None:
+                cv2.circle(img, (x, y), r - 3, fill, -1, cv2.LINE_AA)   # a 3 px white rim stays
         cv2.putText(img, text, (self.X1 + 18, y + 5), FONT, 0.5, GREY, 1, cv2.LINE_AA)
 
     def _draw_tab(self, img, x, color, big):

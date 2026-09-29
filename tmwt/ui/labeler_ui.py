@@ -429,9 +429,8 @@ class LabelerUI:
             specs: button specs for the bar, (text, value, keys).
             label: optional text in a badge at the top left (e.g. the mode).
             hotkeys: optional {key: value} for keys with no button.
-            seek: optional (fraction, markers, text) to show a seek bar above
-                the buttons: the playhead (0-1), [seek_bar.Marker], and text
-                shown at its right (e.g. the time).
+            seek: optional seek_bar.SeekState, to show a seek bar above the
+                buttons.
             alert: optional error text, in red, centred above the seek bar.
 
         Returns:
@@ -450,13 +449,12 @@ class LabelerUI:
             draw_badge(main, alert, (MAIN_W // 2, MAIN_H - bottom - 46), RED, scale=0.6,
                        thickness=2, center=True)
         if seek:
-            fraction, markers, text = seek
             mouse = self._mouse(self.main)
             drag_fraction = self.seek_bar.fraction_at(mouse[0]) if self._drag and mouse else None
-            self.seek_bar.draw(main, fraction, markers, text, hover=self.seek_bar.grab(mouse, markers),
+            self.seek_bar.draw(main, seek, hover=self.seek_bar.grab(mouse, seek.markers),
                                drag=self._drag, drag_fraction=drag_fraction)
         value, pressed_at, _ = self._interact(main, bar_buttons(specs), wait_ms, hotkeys,
-                                              seek_markers=seek[1] if seek else None)
+                                              seek_markers=seek.markers if seek else None)
         if value is None and self._drag is not None and self._window.mouse_pos is not None:
             value = self._drag_value(self._mouse(self.main)[0], done=False)
         return value, pressed_at

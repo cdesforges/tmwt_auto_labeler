@@ -27,7 +27,7 @@ from collections import deque
 
 import numpy as np
 
-from tmwt.ui.seek_bar import Marker
+from tmwt.ui.seek_bar import Marker, SeekState
 from tmwt.ui.widgets import KEY_SPACE
 from tmwt.ui.window import KEY_LEFT, KEY_RIGHT
 
@@ -59,21 +59,28 @@ class PlaybackClock:
 
 def seek_state(times, k, marks=()):
     """
-    LabelerUI.show_frame's `seek` for frame k of a clip whose frames are at
-    `times` (seconds): its position, `marks` as seek_bar.Markers, and the time
-    as elapsed / total. A mark is (time, colour), or (time, colour, id) to make
-    it draggable; marks with no time, or outside the clip, aren't shown.
+    LabelerUI.show_frame's `seek` (a seek_bar.SeekState) for frame k of a clip
+    whose frames are at `times` (seconds): its position, `marks` as Markers,
+    the time as elapsed / total, and — if a mark's nearest frame is frame k —
+    that mark's colour to fill the playhead with. A mark is (time, colour), or
+    (time, colour, id) to make it draggable; marks with no time, or outside the
+    clip, aren't shown.
     """
     t0, span = times[0], max(times[-1] - times[0], 1e-6)
-    markers = [Marker((m[0] - t0) / span, m[1], m[2] if len(m) > 2 else None)
-               for m in marks if m[0] is not None and t0 <= m[0] <= times[-1]]
-    return (times[k] - t0) / span, markers, f"{times[k] - t0:5.2f} / {span:5.2f} s"
+    shown = [m for m in marks if m[0] is not None and t0 <= m[0] <= times[-1]]
+    markers = [Marker((m[0] - t0) / span, m[1], m[2] if len(m) > 2 else None) for m in shown]
+    fill = next((m[1] for m in shown if nearest_frame(times, m[0]) == k), None)
+    return SeekState((times[k] - t0) / span, markers, f"{times[k] - t0:5.2f} / {span:5.2f} s", fill)
+
+
+def nearest_frame(times, t):
+    """Index of the frame whose time is closest to `t`."""
+    return int(np.argmin(np.abs(np.asarray(times) - t)))
 
 
 def seek_index(times, fraction):
     """The frame at `fraction` (0-1) of the way through a clip, by time."""
-    target = times[0] + fraction * (times[-1] - times[0])
-    return int(np.argmin(np.abs(np.asarray(times) - target)))
+    return nearest_frame(times, times[0] + fraction * (times[-1] - times[0]))
 
 
 class Player:

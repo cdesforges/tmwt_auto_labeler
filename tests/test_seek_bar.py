@@ -4,7 +4,8 @@ import unittest
 
 import numpy as np
 
-from tmwt.ui.seek_bar import MARK, SCRUB, Marker, SeekBar
+from tmwt.ui.player import seek_state
+from tmwt.ui.seek_bar import MARK, SCRUB, Marker, SeekBar, SeekState
 from tmwt.ui.widgets import GREEN, MAIN_H, MAIN_W, RED
 
 
@@ -52,12 +53,39 @@ class SeekBarTest(unittest.TestCase):
 
     def test_playhead_hidden_while_dragging_a_mark(self):
         img = np.zeros((MAIN_H, MAIN_W, 3), np.uint8)
-        self.bar.draw(img, 0.5, self.markers, "", drag=(MARK, "start"), drag_fraction=0.1)
+        self.bar.draw(img, SeekState(0.5, self.markers, ""), drag=(MARK, "start"), drag_fraction=0.1)
         x, y = self.bar.x_at(0.5), self.bar.Y
         self.assertFalse((img[y - 8:y - 5, x] == 255).all(axis=-1).any())   # no white playhead dot
         img = np.zeros((MAIN_H, MAIN_W, 3), np.uint8)
-        self.bar.draw(img, 0.5, self.markers, "")
+        self.bar.draw(img, SeekState(0.5, self.markers, ""))
         self.assertTrue((img[y - 6, x] == 255).all())
+
+    def test_playhead_filled_on_a_mark_keeps_white_outline(self):
+        img = np.zeros((MAIN_H, MAIN_W, 3), np.uint8)
+        self.bar.draw(img, SeekState(0.5, self.markers, "", GREEN))
+        x, y = self.bar.x_at(0.5), self.bar.Y
+        self.assertEqual(tuple(img[y, x]), GREEN)              # centre filled
+        self.assertTrue((img[y - 6, x] == 255).all())           # rim still white
+
+
+class SeekStateTest(unittest.TestCase):
+    TIMES = [i / 25 for i in range(100)]   # 25 fps, 4 s
+
+    def test_fill_when_a_mark_is_on_the_frame(self):
+        marks = [(1.0, GREEN, "start"), (3.0, RED, "stop")]
+        self.assertEqual(seek_state(self.TIMES, 25, marks).playhead_fill, GREEN)
+        self.assertEqual(seek_state(self.TIMES, 75, marks).playhead_fill, RED)
+        self.assertIsNone(seek_state(self.TIMES, 26, marks).playhead_fill)
+
+    def test_mark_between_frames_uses_its_nearest_frame(self):
+        marks = [(1.015, GREEN, "start")]   # between frames 25 (1.00) and 26 (1.04)
+        self.assertEqual(seek_state(self.TIMES, 25, marks).playhead_fill, GREEN)
+        self.assertIsNone(seek_state(self.TIMES, 26, marks).playhead_fill)
+
+    def test_unset_marks_are_ignored(self):
+        state = seek_state(self.TIMES, 0, [(None, GREEN, "start")])
+        self.assertEqual(state.markers, [])
+        self.assertIsNone(state.playhead_fill)
 
 
 if __name__ == "__main__":
