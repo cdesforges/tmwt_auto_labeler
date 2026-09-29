@@ -210,116 +210,28 @@ def _detect_aruco_near_endpoint(detector, frame_bgr):
     return None
 
 
-def _prompt_far_endpoint_manual_start(frame_bgr, near_ep):
+def auto_detect_endpoints(frame_bgr, detector, landmarker, backend):
     """
-    Show the manual-start warning and ask the user to click the far endpoint.
-    Returns the clicked (x, y), or None if the user quit.
-    """
-    window = "Manual Start"
-    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback(window, _on_mouse_click)
-    display = frame_bgr.copy()
-    cv2.circle(display, near_ep, 7, (0, 0, 255), -1)
-    cv2.putText(display, "Person not detected, manual timer start needed!",
-                (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 100, 255), 2)
-    cv2.putText(display, "Use the spacebar once the person has started walking.",
-                (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
-    cv2.putText(display, "First, click where the person starts walking.",
-                (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-    cv2.imshow(window, display)
-    click = _wait_for_click_or_key(window)
-    cv2.destroyWindow(window)
-    return click
+    Detect both rope endpoints from the first frame without any user input.
 
-
-def _verify_endpoints(frame_bgr, far_ep, near_ep, manual_start_mode):
-    """
-    Show both endpoints and wait for confirmation.
-    Returns (far_ep, near_ep, manual_start_mode) on confirm, or (None, None, False) on quit.
-    """
-    window = "Verify Endpoints"
-    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-    display = frame_bgr.copy()
-    cv2.circle(display, far_ep, 7, (255, 0, 0), -1)
-    cv2.circle(display, near_ep, 7, (0, 0, 255), -1)
-    cv2.line(display, far_ep, near_ep, (0, 255, 255), 2)
-    prompt = (
-        "Press any key to BEGIN (spacebar will start the timer), or 'q' to quit"
-        if manual_start_mode
-        else "Press any key to confirm, or 'q' to quit"
-    )
-    cv2.putText(display, prompt, (20, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    cv2.imshow(window, display)
-    key = cv2.waitKey(0) & 0xFF
-    cv2.destroyWindow(window)
-    if key == ord("q"):
-        return None, None, False
-    return far_ep, near_ep, manual_start_mode
-
-
-def detect_endpoints(cap, detector, landmarker, backend):
-    """
-    Determine the far and near rope endpoints for one video.
-
-    Strategy (in order):
-      1. Pose detection at frame 0 → ankle midpoint becomes far_ep
-      2. ArUco marker (exactly one) → corner becomes near_ep
-      3. Pose missed, ArUco worked → user clicks far_ep; manual_start_mode=True
-         (spacebar drives the timer because pose can't be trusted at start)
-      4. ArUco missed → user clicks BOTH endpoints via select_rope_endpoints;
-         manual_start_mode=False (the user-defined far_ep is a valid start line,
-         so the auto-timer's crossing logic can fire as normal)
-
-    Args:
-        cap, detector, landmarker: video capture, aruco detector, backend landmarker.
-        backend: pose backend module (see pose_backend.get_backend).
+    - Far endpoint: the ankle midpoint of the only person in frame (they stand
+      at the start of the walk).
+    - Near endpoint: the corner of the single ArUco marker at the finish line.
 
     Returns:
-      (far_ep, near_ep, manual_start_mode, pose_placed_far_ep) on success.
-      (None, None, False, False) on failure / user cancellation.
-
-      pose_placed_far_ep is True only when far_ep came from the pose detector
-      itself (branch 3). Downstream timer logic uses this to decide whether the
-      "crossing at t=0" start path is safe (it isn't when far_ep IS the subject's
-      standstill position — ankle noise will trigger it prematurely).
+        (far_ep, near_ep, problem). Both endpoints are (x, y) tuples when
+        detection worked and problem is None; otherwise the endpoints are None
+        and problem is a short human-readable reason.
     """
-    if not cap.isOpened():
-        print("  ERROR: Detect endpoints was passed an unopened cap object!")
-        return None, None, False, False
-
-    ret, frame_bgr = cap.read()
-    if not ret:
-        print("  ERROR: Could not read first frame.")
-        return None, None, False, False
-
-    _, far_ep = select_person(frame_bgr, landmarker, backend)
     near_ep = _detect_aruco_near_endpoint(detector, frame_bgr)
-
-    # Branch 1: ArUco missing — fully manual two-click selection. Auto-timer enabled.
     if near_ep is None:
-        print("  No single ArUco marker detected — falling back to manual endpoint selection.")
-        far_ep, near_ep = select_rope_endpoints(frame_bgr)
-        if far_ep is None or near_ep is None:
-            return None, None, False, False
-        return far_ep, near_ep, False, False
+        return None, None, "no ArUco marker"
 
-    # Branch 2: pose missed but ArUco worked — click for far_ep, spacebar timing.
-    if far_ep is None:
-        far_ep = _prompt_far_endpoint_manual_start(frame_bgr, near_ep)
-        if far_ep is None:
-            return None, None, False, False
-        far_ep, near_ep, manual_start_mode = _verify_endpoints(
-            frame_bgr, far_ep, near_ep, manual_start_mode=True
-        )
-        if far_ep is None:
-            return None, None, False, False
-        return far_ep, near_ep, manual_start_mode, False
-
-    # Branch 3: fully automatic — far_ep IS the subject's standstill position.
-    far_ep, near_ep, manual_start_mode = _verify_endpoints(
-        frame_bgr, far_ep, near_ep, manual_start_mode=False
-    )
-    if far_ep is None:
-        return None, None, False, False
-    return far_ep, near_ep, manual_start_mode, True
+    all_poses = backend.detect_poses_image(landmarker, frame_bgr)
+    centers = [c for c in (backend.get_ankle_midpoint(p, frame_bgr.shape) for p in all_poses)
+               if c is not None]
+    if not centers:
+        return None, None, "no person at start"
+    if len(centers) > 1:
+        return None, None, f"{len(centers)} people at start"
+    return centers[0], (int(near_ep[0]), int(near_ep[1])), None
