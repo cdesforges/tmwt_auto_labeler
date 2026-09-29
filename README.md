@@ -212,9 +212,13 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
    | Replay (`R`) | Play the video again. |
    | Quit review (Esc) | Review stops; the remaining videos keep their automatic results, marked unreviewed. |
 
-3. **Save.** Once review is finished, the outputs of every video that wasn't
-   rejected are written in one go, with a progress bar. Nothing is written
-   during review, so there's no wait between videos.
+3. **Save.** Once review is finished (or you quit it), a **Review complete**
+   screen shows what will be saved. **Save results** writes the outputs of every
+   video that wasn't skipped, in one go, with a progress bar; **Exit without
+   saving** writes nothing (the analysis files stay, so you can review again
+   without re-processing). Click a video in the sidebar to change it first; you
+   come back to this screen afterwards. Nothing is written during review, so
+   there's no wait between videos.
 4. **Report.** `labeling_report.csv` and `labeling_report.md` summarise every
    video (see [Output](#output)).
 
@@ -325,7 +329,7 @@ to each CSV, so it shows exactly the timing approved at review. Older CSVs
 without that file fall back to the start-line and finish-line crossings.
 
 ```bash
-python view.py <csv_directory> [--no_content_crop]
+python view.py --input_dir <output folder> [--no_content_crop]
 ```
 
 | Flag                | Default                 | Description                                                                     |

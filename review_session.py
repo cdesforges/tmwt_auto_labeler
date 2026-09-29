@@ -54,12 +54,17 @@ def load_jobs(jobs, ui=None):
 def run(jobs, ui, output_dir, review_first=True):
     """
     Review (if there's a window and review_first), save the outputs and write
-    the report; with a window, finish on a summary screen.
+    the report; with a window, finish on a summary screen. After a review, the
+    user confirms saving first (and can exit without saving).
     """
     if ui is not None and review_first:
         first = ask_to_review(ui, jobs)
         if first is not None:
             run_review(jobs, ui, first)
+            if not confirm_save(jobs, ui):
+                print("\nExited without saving. The analysis files are kept, so the "
+                      "videos can be reviewed again without re-processing.")
+                return
     save_outputs(jobs, ui)
     report_path, _ = report.write_report(jobs, output_dir, _pose_models(jobs))
     if ui is not None:
@@ -131,7 +136,44 @@ def ask_to_review(ui, jobs):
     return next_unreviewed(jobs, -1) if choice == "review" else None
 
 
-def run_review(jobs, ui, first):
+def confirm_save(jobs, ui):
+    """
+    "Review complete" screen: what will be saved, with Save results and Exit
+    without saving. Clicking a video in the sidebar reviews just that video,
+    then returns here. Closing the window counts as Save.
+
+    Returns:
+        True to save.
+    """
+    while True:
+        counts = {}
+        for job in jobs:
+            result = report.job_result(job)[0]
+            counts[result] = counts.get(result, 0) + 1
+        lines = [("Review complete", GREEN)]
+        for result, text, color in (
+                (report.APPROVED, "approved", GREEN),
+                (report.REJECTED, "skipped (not saved)", RED),
+                (report.UNREVIEWED, "not reviewed (saved with their automatic timing)", WHITE),
+                (report.FAILED, "can't be saved (no timing or analysis)", RED)):
+            if counts.get(result):
+                lines.append((f"{counts[result]} {text}", color))
+        lines.append(("Click a video in the list to change it before saving.", GREY))
+
+        ui.active = None
+        ui.review_targets = set(reviewable(jobs))
+        try:
+            choice = ui.show_message(lines, [("Save results", "save", KEY_ENTER + (KEY_ESC,)),
+                                             ("Exit without saving", "exit", ())])
+        except JumpTo as jump:
+            run_review(jobs, ui, jump.index, only_one=True)
+            continue
+        finally:
+            ui.review_targets = set()
+        return choice == "save"
+
+
+def run_review(jobs, ui, first, only_one=False):
     """
     Review jobs, starting with index `first`, until every reviewable job has
     been approved or rejected, or the user quits.
@@ -141,6 +183,9 @@ def run_review(jobs, ui, first):
     automatically. Clicking a file in the sidebar at any point leaves the
     current review undecided and switches to that file — including one already
     reviewed, whose result the new review replaces.
+
+    With only_one, stop after the first decision (used when changing one video
+    from the "Review complete" screen).
     """
     ui.review_targets = set(reviewable(jobs))
     current = first
@@ -159,7 +204,7 @@ def run_review(jobs, ui, first):
                 print(f"  Switching to {jobs[jump.index].name}")
                 current = jump.index
                 continue
-            current = next_unreviewed(jobs, current)
+            current = None if only_one else next_unreviewed(jobs, current)
     finally:
         ui.review_targets = set()
 

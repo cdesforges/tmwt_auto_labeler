@@ -8,7 +8,9 @@ shows exactly what was approved at review. CSVs from before that file existed
 fall back to the start-line / finish-line crossings of t_along.
 
 Usage:
-    python view.py <csv_directory> [--no_content_crop]
+    python view.py --input_dir <output folder> [--no_content_crop]
+
+(The folder can also be given without --input_dir, as before.)
 
 Controls:
     q       = next file (quits after the last one)
@@ -167,11 +169,16 @@ def play_csv(csv_path, crop_to_content=True):
 def main():
     parser = argparse.ArgumentParser(
         description="TMWT Skeleton Viewer — play back de-identified CSV data.")
-    parser.add_argument("input_dir", help="Directory containing CSV files from label.py.")
+    parser.add_argument("--input_dir", default=None,
+                        help="Folder of CSVs written by the labeler (its output folder).")
+    parser.add_argument("folder", nargs="?", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--no_content_crop", action="store_true",
                         help="Show the full recorded frame instead of cropping to the "
                              "region containing drawn content.")
     args = parser.parse_args()
+    args.input_dir = args.input_dir or args.folder   # the older positional form still works
+    if args.input_dir is None:
+        parser.error("the following arguments are required: --input_dir")
 
     if not os.path.isdir(args.input_dir):
         sys.exit(f"Error: '{args.input_dir}' is not a valid directory.")
