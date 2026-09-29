@@ -9,6 +9,7 @@ import numpy as np
 
 from tmwt.pose import pose_common
 from tmwt.core.job import COURSE_M
+from tmwt.detection import pose_check
 
 # Width (px) of the info panel placed to the right of each frame.
 PANEL_W = 300
@@ -27,16 +28,21 @@ _RULE = (80, 80, 80)
 _GREEN = (0, 200, 0)
 _BRIGHT_GREEN = (0, 255, 0)
 _YELLOW = (0, 255, 255)
+_ORANGE = pose_common.FLAGGED_COLOR
 
 # Panel text shown before the walk starts.
 WAITING_AUTO = ("Waiting for person", "to start walking...")
 WAITING_MANUAL = ("Mark the start when", "the person starts walking")
 
 
-def draw_scene(img, pose, body_px, far_ep, near_ep):
-    """Draw the skeleton, body point and rope on `img` (in place). Any may be None."""
+def draw_scene(img, pose, body_px, far_ep, near_ep, flags=()):
+    """
+    Draw the skeleton, body point and rope on `img` (in place). Any may be
+    None. Landmarks in `flags` (implausible points, see pose_check.py) are
+    drawn in orange.
+    """
     if pose is not None:
-        pose_common.draw_pose(img, pose)
+        pose_common.draw_pose(img, pose, highlight=flags)
         if body_px is not None:
             cv2.circle(img, body_px, 5, BODY_COLOR, -1)
     if far_ep is not None and near_ep is not None:
@@ -47,7 +53,7 @@ def draw_scene(img, pose, body_px, far_ep, near_ep):
 
 def draw_info_panel(height, time_s, frame_idx, t_along, walk_start, walk_end,
                     title="TMWT Labeler", subtitle=None,
-                    waiting_lines=WAITING_AUTO, controls=""):
+                    waiting_lines=WAITING_AUTO, controls="", model_strength=None, flagged=()):
     """
     Build the info side panel for one frame.
 
@@ -115,21 +121,32 @@ def draw_info_panel(height, time_s, frame_idx, t_along, walk_start, walk_end,
     y += 22
     if t_along is not None:
         text(f"t_along:  {t_along:+.3f}", y, 0.45, _INFO)
+        y += 22
+    if model_strength:
+        text(f"Model strength:  {model_strength}", y, 0.45, _INFO)
+        y += 22
+    if flagged:
+        y += 8
+        text("Pose check (orange):", y, 0.45, _ORANGE)
+        for name in flagged:
+            y += 20
+            text(f"  {name.replace('_', ' ')}", y, 0.42, _ORANGE)
 
     text(controls, height - 15, 0.4, _RULE)
     return panel
 
 
 def render_frame(frame_bgr, result, walk_start, walk_end,
-                 waiting_lines=WAITING_AUTO, controls="", with_skeleton=False):
+                 waiting_lines=WAITING_AUTO, controls="", with_skeleton=False, model_strength=None):
     """
     Annotate one analysed frame for the labeler.
 
     Args:
         frame_bgr: the video frame (drawn on in place).
-        result: its job.FrameResult.
+        result: its job.FrameResult (its pose_flags are drawn in orange).
         walk_start, walk_end: the walk timing to show (either may be None).
         with_skeleton: also build the de-identified version.
+        model_strength: the pose model, listed in the panel.
 
     Returns:
         (annotated, skeleton): frame + info panel, and the same annotations on a
@@ -137,8 +154,10 @@ def render_frame(frame_bgr, result, walk_start, walk_end,
     """
     panel = draw_info_panel(frame_bgr.shape[0], result.time_s, result.frame_idx,
                             result.t_along, walk_start, walk_end,
-                            waiting_lines=waiting_lines, controls=controls)
-    args = (result.pose, result.body_px, result.far_ep, result.near_ep)
+                            waiting_lines=waiting_lines, controls=controls,
+                            model_strength=model_strength,
+                            flagged=[pose_check.LANDMARK_NAMES[i] for i in sorted(result.pose_flags)])
+    args = (result.pose, result.body_px, result.far_ep, result.near_ep, result.pose_flags)
     skeleton = None
     if with_skeleton:
         canvas = np.zeros_like(frame_bgr)

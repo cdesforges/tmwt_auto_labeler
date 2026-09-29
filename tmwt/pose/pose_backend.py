@@ -10,7 +10,9 @@ Each backend module exposes the same small inference API:
   detect_poses_image(landmarker, frame_bgr) -> list[pose]
 
 and every landmarker has close(). Backends also have set_device(device) — one of
-"auto", "cpu", "cuda", "mps" — and provenance() -> {"device", "versions"}. Poses are lists of landmarks in the layout
+"auto", "cpu", "cuda", "mps" — and provenance() -> {"device", "versions"}, and
+may have heavier_model(model_path) -> the next larger, more accurate model, or
+None (see heavier_model below). Poses are lists of landmarks in the layout
 described in pose_common.py (including the feet), which also holds the drawing
 and ankle helpers.
 
@@ -19,8 +21,25 @@ per process and share it, and MediaPipe models load quickly (its VIDEO-mode
 landmarker tracks between frames, so a fresh one is needed per video anyway).
 """
 
+import os
+
 BACKENDS = ("mediapipe", "mmpose", "rtmlib")
 DEVICES = ("auto", "cpu", "cuda", "mps")
+
+
+def heavier_model(backend, model_path):
+    """The backend's next larger, more accurate model after `model_path`, or None if there isn't one."""
+    fn = getattr(backend, "heavier_model", None)
+    return fn(model_path) if fn is not None else None
+
+
+def model_strength(model_path):
+    """
+    Short name of a pose model for metadata and display: rtmlib's mode
+    ("balanced", "performance", ...) or a model file's name without its folder
+    and extension (e.g. "pose_landmarker_full").
+    """
+    return os.path.splitext(os.path.basename(str(model_path)))[0]
 
 
 def get_backend(name):

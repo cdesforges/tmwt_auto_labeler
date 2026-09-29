@@ -68,13 +68,10 @@ def interpret(job):
     """
     if job.status == STATUS_FAILED:
         return
-    shape = job.info.first_frame.shape
-    job.tracks = people.build_tracks(job.frames, shape, job.info.fps)
-    subject = people.choose_subject(job.tracks, job.frames, shape)
+    subject = choose_subject(job)
     if subject is None:
         job.status, job.error = STATUS_NO_BODY, "no body detected in any frame"
         return
-    people.set_subject(job, subject)
     job.subject_start = people.subject_start(job)
     n = len(people.candidates(job.tracks, job.frames))
     if n > 1:
@@ -93,6 +90,21 @@ def interpret(job):
     job.far_ep_is_standing_spot = True
     timing.update_timing(job)
     job.status = STATUS_OK if job.duration is not None else STATUS_INCOMPLETE
+
+
+def choose_subject(job):
+    """
+    Follow everyone in the video and make the walking subject job's subject
+    (which also checks their pose: see people.set_subject). Needs no endpoints,
+    so processing can use it too. Returns the subject's Track, or None if
+    nobody was seen.
+    """
+    shape = job.info.first_frame.shape
+    job.tracks = people.build_tracks(job.frames, shape, job.info.fps)
+    subject = people.choose_subject(job.tracks, job.frames, shape)
+    if subject is not None:
+        people.set_subject(job, subject)
+    return subject
 
 
 def track_frames(job, tracker, landmarker, backend, on_progress=None):

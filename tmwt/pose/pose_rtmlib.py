@@ -51,6 +51,18 @@ else:
 # Default Body mode.
 DEFAULT_MODEL_PATH = "balanced"
 _MODES = ("balanced", "performance", "lightweight")
+# Each mode's next larger, more accurate mode (see heavier_model).
+_HEAVIER = {"lightweight": "balanced", "balanced": "performance"}
+
+
+def heavier_model(mode):
+    """
+    The next larger, more accurate mode after `mode`, or None for "performance".
+    "performance" is RTMPose-x at 384x288 with the YOLOX-x detector: about 3x
+    slower than "balanced" (~75 ms a frame on an M1 Max with CoreML), and
+    noticeably steadier on small, backlit or partly hidden feet.
+    """
+    return _HEAVIER.get(mode)
 
 
 # Requested device (see set_device).

@@ -59,6 +59,7 @@ def save(jobs, last_index):
             "timing_source": job.timing_source,
             "timing_detail": job.timing_detail,
             "timing_note": job.timing_note,
+            "pose_confirmed": job.pose_confirmed,
         }
     data = {"format_version": FORMAT_VERSION,
             "saved": datetime.now().isoformat(timespec="minutes"),
@@ -133,6 +134,7 @@ def restore(jobs, progress):
         job.walk_start, job.walk_end = entry["walk_start"], entry["walk_end"]
         job.timing_source, job.timing_detail = entry["timing_source"], entry["timing_detail"]
         job.timing_note = entry.get("timing_note", "")
+        job.pose_confirmed = entry.get("pose_confirmed", False)
         job.review, job.review_note = entry["review"], entry["review_note"]
     return last
 

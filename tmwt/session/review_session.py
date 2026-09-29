@@ -163,7 +163,7 @@ def _show_restored_states(jobs, ui):
 
 def _pose_models(jobs):
     """The pose model(s) the analysis files were made with, for the report."""
-    models = sorted({f"{m['backend']}: {m['model']} ({m.get('device', '?')})"
+    models = sorted({f"{m['backend']}: {m.get('model_strength') or m['model']} ({m.get('device', '?')})"
                      for m in (job.analysis_meta for job in jobs) if m.get("backend")})
     return ", ".join(models) or "unknown"
 

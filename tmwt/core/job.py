@@ -62,6 +62,9 @@ class FrameResult:
     # this frame's pixels, or None where they weren't seen.
     pose: Optional[list] = None
     body_px: Optional[Point] = None
+    # The subject's implausible points here (pose_check.py): {landmark index:
+    # check name}. Drawn in orange and left out of the timing; data unchanged.
+    pose_flags: dict = field(default_factory=dict)
 
     # The subject in REFERENCE-frame pixels (see tracking.to_reference_frame).
     # Set only when both the ankles and the head were found; such frames make
@@ -122,6 +125,21 @@ class VideoJob:
     review: str = REVIEW_UNREVIEWED
     review_note: str = ""
     saved: bool = False
+
+    # Pose plausibility (pose_check.py): the subject's flagged points, and
+    # whether the reviewer looked at them and confirmed the detection is fine.
+    pose_flags: list = field(default_factory=list)   # [pose_check.Flag]
+    pose_confirmed: bool = False
+
+    @property
+    def model_strength(self):
+        """The pose model the analysis used in the end (e.g. "balanced", "performance")."""
+        return self.analysis_meta.get("model_strength") or self.analysis_meta.get("model") or "unknown"
+
+    @property
+    def pose_flagged_frames(self):
+        """How many frames have flagged points."""
+        return len({fl.frame for fl in self.pose_flags})
 
     @property
     def track(self):

@@ -187,11 +187,14 @@ class _Crossings:
 
 
 def _landmark_series(job, idx):
-    """One landmark's t_along in every frame, smoothed like the midpoint's (None where unseen)."""
+    """
+    One landmark's t_along in every frame, smoothed like the midpoint's (None
+    where unseen, and where pose_check flagged it as implausible).
+    """
     h, w = job.info.first_frame.shape[:2]
     values = []
     for f in job.frames:
-        lm = f.pose[idx] if f.pose is not None else None
+        lm = f.pose[idx] if f.pose is not None and idx not in f.pose_flags else None
         px = pose_common.landmark_px(lm, w, h)
         values.append(metric.t_along(px, f.far_ep, f.near_ep) if px is not None else None)
     return smooth_t_along(values)

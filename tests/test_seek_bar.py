@@ -82,6 +82,20 @@ class SeekStateTest(unittest.TestCase):
         self.assertEqual(seek_state(self.TIMES, 25, marks).playhead_fill, GREEN)
         self.assertIsNone(seek_state(self.TIMES, 26, marks).playhead_fill)
 
+    def test_flagged_frames_become_stretches(self):
+        state = seek_state(self.TIMES, 0, [], flagged=[10, 11, 12, 50])
+        self.assertEqual(len(state.flagged), 2)                    # 10-12 merge, 50 alone
+        a, b = state.flagged[0]
+        self.assertAlmostEqual(a, self.TIMES[10] / self.TIMES[-1])
+        self.assertAlmostEqual(b, self.TIMES[13] / self.TIMES[-1])
+
+    def test_flagged_stretch_is_drawn_orange(self):
+        from tmwt.ui.seek_bar import FLAGGED_COLOR
+        bar = SeekBar()
+        img = np.zeros((MAIN_H, MAIN_W, 3), np.uint8)
+        bar.draw(img, SeekState(0.0, [], "", None, [(0.5, 0.5)]))    # one frame, zero width
+        self.assertEqual(tuple(img[bar.Y, bar.x_at(0.5)]), FLAGGED_COLOR)
+
     def test_unset_marks_are_ignored(self):
         state = seek_state(self.TIMES, 0, [(None, GREEN, "start")])
         self.assertEqual(state.markers, [])

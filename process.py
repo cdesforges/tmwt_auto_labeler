@@ -18,6 +18,7 @@ Usage:
 On a cluster whose compute nodes have no internet, run once with
 --download_models on a node that has, so the model files are cached (for rtmlib
 in $TORCH_HOME/hub, else $XDG_CACHE_HOME/rtmlib/hub, else ~/.cache/rtmlib/hub).
+That fetches the heavier model used to re-run videos with pose anomalies too.
 """
 
 import argparse
@@ -26,15 +27,15 @@ import sys
 
 from tmwt.core import analysis_file
 from tmwt.detection import processing
-from tmwt.pose.pose_backend import BACKENDS, DEVICES, get_backend
+from tmwt.pose.pose_backend import BACKENDS, DEVICES, get_backend, heavier_model
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="TMWT processing: pose estimation and tracking for a folder of videos.")
-    parser.add_argument("--input_dir", required=True,
-                        help="Folder of videos. Analysis files are written to its "
-                             "tmwt_analysis/ subfolder.")
+    parser.add_argument("--input_dir",
+                        help="Folder of videos (required unless --download_models). Analysis "
+                             "files are written to its tmwt_analysis/ subfolder.")
     parser.add_argument("--backend", choices=BACKENDS, default="rtmlib",
                         help="Pose backend (default: rtmlib).")
     parser.add_argument("--model", default=None,
@@ -49,8 +50,12 @@ def parse_args():
     parser.add_argument("--reprocess", action="store_true",
                         help="Process every video, even those already processed.")
     parser.add_argument("--download_models", action="store_true",
-                        help="Only download / load the pose model, then exit.")
-    return parser.parse_args()
+                        help="Only download / load the pose model (and the heavier one used "
+                             "for videos with pose anomalies), then exit.")
+    args = parser.parse_args()
+    if args.input_dir is None and not args.download_models:
+        parser.error("the following arguments are required: --input_dir")
+    return args
 
 
 def main():
@@ -63,7 +68,10 @@ def main():
 
     if args.download_models:
         processing.load_pose_model(backend, args.backend, model_path)
-        print("Pose model ready.")
+        heavier = heavier_model(backend, model_path)
+        if heavier is not None:
+            processing.load_pose_model(backend, args.backend, heavier)
+        print("Pose models ready.")
         return
 
     if not os.path.isdir(args.input_dir):

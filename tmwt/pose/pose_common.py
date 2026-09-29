@@ -139,11 +139,16 @@ def ankle_midpoint(pose, frame_shape):
     return (int(x * w), int(y * h))
 
 
-def draw_pose(img, pose, color=(0, 255, 0), point_radius=4, line_thickness=2):
+# Colour of points flagged as implausible (see draw_pose's `highlight`).
+FLAGGED_COLOR = (0, 140, 255)   # orange
+
+
+def draw_pose(img, pose, color=(0, 255, 0), point_radius=4, line_thickness=2, highlight=()):
     """
     Draw one pose's skeleton on `img` (in place): the connection lines, every
     body landmark, and the nose as the single face point. Missing landmarks
-    are skipped.
+    are skipped. Landmarks in `highlight` (indices), and the lines to them,
+    are drawn in FLAGGED_COLOR with bigger points.
     """
     h, w = img.shape[:2]
 
@@ -152,9 +157,13 @@ def draw_pose(img, pose, color=(0, 255, 0), point_radius=4, line_thickness=2):
 
     for a, b in POSE_CONNECTIONS:
         if pose[a] is not None and pose[b] is not None:
-            cv2.line(img, px(pose[a]), px(pose[b]), color, line_thickness)
+            flagged = a in highlight or b in highlight
+            cv2.line(img, px(pose[a]), px(pose[b]), FLAGGED_COLOR if flagged else color, line_thickness)
 
     for i, lm in enumerate(pose):
         if lm is None or (i in FACE_IDXS and i != NOSE_IDX):
             continue
-        cv2.circle(img, px(lm), point_radius, color, -1)
+        if i in highlight:
+            cv2.circle(img, px(lm), point_radius + 3, FLAGGED_COLOR, -1)
+        else:
+            cv2.circle(img, px(lm), point_radius, color, -1)

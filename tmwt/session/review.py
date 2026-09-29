@@ -12,6 +12,12 @@ a prompt (LabelerUI.ask_review):
   - Skip this file           -> the file is rejected; nothing is saved
 A video in which nobody was detected at all only offers "Skip this file".
 
+If the pose check (pose_check.py) flagged points the heavier model couldn't
+fix, the review starts with an alert, the flagged points are drawn in orange
+during playback (and left out of the timing), and approving the video asks the
+reviewer to confirm the detection is fine, or remove the video from the
+analysis.
+
 Every playback has a seek bar, frame-step buttons and the mark buttons (green
 dot: walk start, red dot: walk stop), and the marks can be dragged along the
 seek bar, so the timing can be corrected during the first playback too. Marks
@@ -25,7 +31,7 @@ them, time the video manually, or skip it.
 import cv2
 
 from tmwt.ui import annotate
-from tmwt.detection import people
+from tmwt.detection import people, pose_check
 from tmwt.measurement import timing
 from tmwt.core import video_io
 from tmwt.core.job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_NO_BODY
@@ -72,6 +78,8 @@ def review_job(job, ui, i):
 
     note = None
     replay = True
+    if job.pose_flags and not job.pose_confirmed:
+        _alert_pose_flags(job, ui)
     if job.far_ep is None or job.near_ep is None:
         reason = f"{job.name}: automatic detection failed ({job.endpoint_problem})"
         outcome, note = _set_endpoints(job, ui, reason)
@@ -95,6 +103,9 @@ def review_job(job, ui, i):
 
         if note is None and job.timing_source == "auto" and job.timing_note:
             note = job.timing_note   # the automatic start is uncertain or missing
+        if note is None and job.pose_flags and not job.pose_confirmed:
+            note = (f"Pose anomalies in {job.pose_flagged_frames} frame(s), shown in orange: "
+                    f"you'll be asked to confirm.")
         choice = ui.ask_review(last_frame, summary_lines(job), note, wrong_person=several_people)
         note = None
         if choice == "approve":
@@ -102,6 +113,15 @@ def review_job(job, ui, i):
                 note = "Timing is incomplete: time it manually (3), or skip the file (4)."
                 replay = False
                 continue
+            if job.pose_flags and not job.pose_confirmed:
+                decision = _confirm_pose(job, ui, last_frame)
+                if decision == "back":
+                    replay = False
+                    continue
+                if decision == "remove":
+                    _reject(job, ui, i, "pose detection anomalies")
+                    return None
+                job.pose_confirmed = True
             job.review = REVIEW_APPROVED
             ui.set_state(i, DONE, f"approved  {job.duration:.2f}s")
             ui.mark_reviewed(i, APPROVED_MARK)
@@ -123,6 +143,42 @@ def review_job(job, ui, i):
         elif choice == "quit":
             return QUIT
         # "replay" loops round and plays again.
+
+
+def _pose_flag_lines(job, n=3):
+    """Explanation lines about the job's flagged pose points, for the alert and confirmation."""
+    examples = sorted({(round(fl.time_s, 2), pose_check.LANDMARK_NAMES[fl.landmark].replace("_", " "))
+                       for fl in job.pose_flags})[:n]
+    check = (job.analysis_meta.get("pose_check") or {}).get("result", "")
+    retried = "re-analysed with the heavier model, " if len(
+        (job.analysis_meta.get("pose_check") or {}).get("runs", [])) > 1 else ""
+    return [
+        (f"{job.pose_flagged_frames} frame(s) have leg or foot points that look implausible,", GREY),
+        ("e.g. " + ", ".join(f"{name} at {t:.2f}s" for t, name in examples) + ".", GREY),
+        (f"Model strength: {job.model_strength} ({retried}{check or 'not checked'}).", GREY),
+    ]
+
+
+def _alert_pose_flags(job, ui):
+    """Tell the reviewer about flagged pose points before the first playback."""
+    ui.show_message([("Pose detection anomalies", ORANGE)] + _pose_flag_lines(job) + [
+        ("They're shown in orange during playback, and left out of the timing.", GREY),
+    ], [("Play video", "play", KEY_ENTER)], background=job.info.first_frame)
+
+
+def _confirm_pose(job, ui, background):
+    """
+    Before approving a video with flagged pose points: is the detection fine?
+
+    Returns:
+        "keep" (the detection is fine), "remove" (take the video out of the
+        analysis), or "back" (to the review prompt).
+    """
+    return ui.show_message([("Is the pose detection fine?", ORANGE)] + _pose_flag_lines(job) + [
+        ("Keep the video if the orange points don't affect the walk; otherwise remove it.", GREY),
+    ], [("Detection is fine: keep it", "keep", KEY_ENTER),
+        ("Remove this video from the analysis", "remove", ()),
+        ("Go back", "back", (KEY_ESC,))], background=background)
 
 
 def _time_manually(job, ui, background):
@@ -189,7 +245,8 @@ def playback(job, ui, manual_timing=False):
         marks = {"start": job.walk_start, "stop": job.walk_end}
         waiting = annotate.WAITING_AUTO
     original = dict(marks)
-    player = Player([f.time_s for f in job.frames])
+    player = Player([f.time_s for f in job.frames],
+                    flagged=[k for k, f in enumerate(job.frames) if f.pose_flags])
     source = video_io.FrameSource(job)
     m_next = "start"   # which mark M sets next
     ui.start_playback()
@@ -203,7 +260,8 @@ def playback(job, ui, manual_timing=False):
             backwards = start is not None and end is not None and end <= start
             # A stop before the start isn't a walk: don't draw it as finished.
             last, _ = annotate.render_frame(frame, job.frames[player.k], start,
-                                            None if backwards else end, waiting)
+                                            None if backwards else end, waiting,
+                                            model_strength=job.model_strength)
             specs = ([_mark_button(which, m_next) for which in _MARKS] + player.transport()
                      + [("Done (Enter)" if manual_timing else "Skip to review (Enter)", "skip", KEY_ENTER)])
             label = None
@@ -322,6 +380,7 @@ def _pick_subject(job, ui):
     if k is None:
         return False
     people.set_subject(job, present[k][0])
+    job.pose_confirmed = False   # a different person: their pose hasn't been looked at
     job.subject_start = people.subject_start(job)
     if job.far_ep_is_standing_spot and job.subject_start is not None:
         job.far_ep = job.subject_start   # the start point is where this person stood

@@ -119,7 +119,11 @@ accurate.
 | `--device`          | `auto`               | `auto` (CUDA if available, else CoreML on Apple Silicon, else CPU), `cpu`, `cuda` or `mps`. |
 | `--no_matte_crop`   | _off_                | Don't crop solid-colour mattes (letterbox / pillarbox bars). |
 | `--reprocess`       | _off_                | Process every video, even ones already processed. |
-| `--download_models` | _off_                | Only download / load the pose model, then exit. |
+| `--download_models` | _off_                | Only download / load the pose model (and the heavier one used for videos with pose anomalies), then exit. |
+
+Videos whose pose check finds implausible points are processed again with the
+heavier model automatically; see [Pose check](#pose-check). The results are in
+`tmwt_analysis/processing_report.csv` / `.md`.
 
 ### `review.py`
 
@@ -292,6 +296,49 @@ face or hand detail); MediaPipe provides all but the small toes. If no toe is
 seen crossing a line, the crossing falls back to the ankles, then the ankle
 midpoint.
 
+## Pose check
+
+After pose estimation, the walking subject's leg and foot points are checked
+for ones that can't be right (`tmwt/detection/pose_check.py`):
+
+- **foot_length** — a heel or toe further from its ankle than 0.6 × the
+  subject's leg length (hip → knee → ankle, median over the surrounding
+  second). Real ankle-to-toe distances are about a fifth of the leg, so this
+  only catches points thrown elsewhere (onto the floor, up to the waist).
+- **spike** — a point that jumps more than 0.35 body heights away for one
+  frame and back.
+
+The first and last second of each video aren't checked (people stepping into
+or out of frame, the camera being picked up or covered). On the 15 control
+videos the check flags nothing; on the backlit old control it flags exactly
+the frames where toes were thrown across the floor.
+
+**During processing** (`process.py`, `label.py`): if any points are flagged,
+the video is processed again with the backend's heavier model (rtmlib
+`balanced` → `performance`: RTMPose-x at 384×288 with the YOLOX-x detector,
+about 3× slower, ~75 ms a frame on an M1 Max), and that output is kept. The
+model used in the end is recorded as `model_strength`, and the checks' results
+as `pose_check` (`ok`, `fixed by heavier model`, `anomalies remain`), in the
+analysis file. `tmwt_analysis/processing_report.csv` / `.md` list every video,
+and any whose anomalies remain are also printed at the end of the run — no
+questions are asked, so it runs unattended (e.g. under SLURM).
+
+**At review**, a video whose anomalies remain:
+- opens with an alert saying which points were flagged and when;
+- shows the flagged points (and their lines) in **orange** during playback,
+  with an orange stretch on the timeline for those frames and the point names
+  in the info panel, which also lists the model strength for every video;
+- leaves flagged points out of the timing (a stray toe can't trigger a line
+  crossing);
+- asks, when approved, whether the detection is fine: **Detection is fine:
+  keep it**, or **Remove this video from the analysis** (it's then rejected,
+  reason "pose detection anomalies").
+
+Pose data is never altered: flagged points stay in the CSV's landmark columns,
+and the CSV's `pose_flags` column says which ones they are in each frame (e.g.
+`left_small_toe:foot_length`), so the gait analysis can decide what to do with
+them.
+
 ## Multiple people
 
 Everyone in view is detected and followed through the video (up to five
@@ -359,8 +406,8 @@ are written to `--output_dir`. Videos rejected at review get no outputs.
 
 | File                        | Contents                                                                                              |
 |-----------------------------|-------------------------------------------------------------------------------------------------------|
-| `<basename>.csv`            | Frame-by-frame body position, rope endpoints, position along the course (`t_along`: 0 at the start line, 1 at the finish line), 35 pose landmarks.|
-| `<basename>_timing.json`    | The walk timing the labeler decided (start, end, duration, speed), how the start was found, and the review outcome. `view.py` reads it. |
+| `<basename>.csv`            | Frame-by-frame body position, rope endpoints, position along the course (`t_along`: 0 at the start line, 1 at the finish line), 35 pose landmarks (raw), and `pose_flags` (see [Pose check](#pose-check)).|
+| `<basename>_timing.json`    | The walk timing the labeler decided (start, end, duration, speed), how the start was found, the review outcome, the pose model used (`model_strength`) and the pose check's outcome (`pose_check`). `view.py` reads it. |
 | `<basename>_annotated.mp4`  | Source frames with skeleton, rope, and info panel overlaid.                                           |
 | `<basename>_skeleton.mp4`   | Black canvas with skeleton, rope, and info panel only — de-identified for sharing.                    |
 
@@ -369,8 +416,8 @@ The info panel on both output videos shows the walk status and timer.
 Each run also writes `labeling_report.csv` and `labeling_report.md` with one row
 per video: its result (`approved`, `auto (not reviewed)`, `rejected`,
 `failed`), the reason, whether the endpoints and timing were automatic or
-manual, how the start was found, the start / end / duration / speed, and
-whether outputs were saved.
+manual, how the start was found, the start / end / duration / speed, the
+pose model used, the pose check's outcome, and whether outputs were saved.
 
 ---
 
@@ -447,6 +494,7 @@ tmwt/
     processing.py         #   Processing a folder: skip / process / save analysis files
     tracking.py           #   Ground-plane optical-flow tracker (camera drift)
     people.py             #   Following everyone in view and choosing the walking subject
+    pose_check.py         #   Flagging implausible leg / foot points (pose check)
     endpoints.py          #   Finish line from the ArUco marker
   measurement/            # Turning positions into timing
     metric.py             #   Geometry: t_along and perspective-correct distance along the course

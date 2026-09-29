@@ -34,6 +34,7 @@ from tmwt.ui import annotate
 from tmwt.core import data_export
 from tmwt.measurement import timing
 from tmwt.core.job import COURSE_M
+from tmwt.detection import pose_check
 from tmwt.ui.labeler_ui import JumpTo, LabelerUI, WindowClosed
 from tmwt.ui.sidebar import DONE, FAILED, UNREVIEWED, WAITING
 from tmwt.ui.top_bar import folder_title
@@ -106,19 +107,22 @@ def content_bounds(rows, frame_w, frame_h, margin=CONTENT_MARGIN):
     return (x0, y0, x1 - x0, y1 - y0)
 
 
-def render_row(row, frame_w, frame_h, crop, walk_start, walk_end, file_name):
+def render_row(row, frame_w, frame_h, crop, walk_start, walk_end, file_name, model_strength=None):
     """One frame of the viewer: the cropped skeleton canvas plus the info panel."""
     canvas = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
+    flags = data_export.row_flags(row)
     annotate.draw_scene(canvas, data_export.row_pose(row),
                         data_export.row_point(row, "body"),
                         data_export.row_point(row, "far_ep"),
-                        data_export.row_point(row, "near_ep"))
+                        data_export.row_point(row, "near_ep"), flags)
     # Drawing happens in full-canvas coordinates, so crop afterwards.
     x, y, w, h = crop
     canvas = canvas[y:y + h, x:x + w]
     panel = annotate.draw_info_panel(
         h, row.get("time_s") or 0.0, int(row.get("frame") or 0), row.get("t_along"),
-        walk_start, walk_end, title="TMWT Viewer", subtitle=file_name)
+        walk_start, walk_end, title="TMWT Viewer", subtitle=file_name,
+        model_strength=model_strength,
+        flagged=[pose_check.LANDMARK_NAMES[i] for i in sorted(flags)])
     return np.hstack([canvas, panel])
 
 
@@ -132,6 +136,7 @@ class Recording:
         self.frame_w = int(first.get("frame_w") or DEFAULT_FRAME_W)
         self.frame_h = int(first.get("frame_h") or DEFAULT_FRAME_H)
         self.walk_start, self.walk_end, self.source = walk_timing(csv_path, self.rows)
+        self.model_strength = (data_export.read_timing(csv_path) or {}).get("model_strength")
         self.times = [row.get("time_s") or 0.0 for row in self.rows]
         self.crop = (0, 0, self.frame_w, self.frame_h)
         if crop_to_content and self.rows:
@@ -140,7 +145,7 @@ class Recording:
     def render(self, k):
         """Frame k of the recording, drawn for the viewer."""
         return render_row(self.rows[k], self.frame_w, self.frame_h, self.crop,
-                          self.walk_start, self.walk_end, self.name)
+                          self.walk_start, self.walk_end, self.name, self.model_strength)
 
     def time_at(self, k):
         return self.rows[k].get("time_s") or 0.0
@@ -183,7 +188,8 @@ def play(ui, recording, index, count):
         return index + 1 if index + 1 < count else None
     ui.active = index
     ui.start_playback()
-    player = Player(recording.times)
+    player = Player(recording.times,
+                    flagged=[k for k, row in enumerate(recording.rows) if row.get("pose_flags")])
     while True:
         transport = player.transport()
         specs = ([("Previous recording", "previous", (ord("p"), ord("P")), "prev_video")] + transport

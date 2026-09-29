@@ -4,10 +4,18 @@ Per-video outputs, and reading them back (view.py).
 For each saved video, next to <basename>.csv:
 
   <basename>.csv            one row per frame: timestamp, body point, rope
-                            endpoints, t_along and all 33 pose landmarks. It
-                            holds no image data, so it is de-identified.
+                            endpoints, t_along, all 35 pose landmarks (raw, as
+                            the model gave them) and pose_flags. It holds no
+                            image data, so it is de-identified.
   <basename>_timing.json    the walk timing decided by the labeler (start, end,
-                            duration, how it was found, review outcome).
+                            duration, how it was found, review outcome), the
+                            pose model used (model_strength) and the pose
+                            check's outcome (pose_check).
+
+pose_flags lists the subject's points the pose check found implausible in that
+frame, e.g. "left_small_toe:foot_length;right_heel:foot_length" (see
+tmwt/detection/pose_check.py); empty when none. Flagged points are left in the
+landmark columns unchanged, so it's up to the analysis whether to use them.
   <basename>_annotated.mp4  the video with skeleton, rope and info panel.
   <basename>_skeleton.mp4   the same annotations on a black canvas (de-identified).
 
@@ -24,6 +32,8 @@ import cv2
 from tmwt.ui import annotate
 from tmwt.pose import pose_common
 from tmwt.core.job import COURSE_M
+from tmwt.core import report
+from tmwt.detection import pose_check
 
 # Suffixes of the output files, appended to the CSV's basename.
 TIMING_SUFFIX = "_timing.json"
@@ -45,7 +55,7 @@ CORE_COLUMNS = [
 ]
 HEADERS = CORE_COLUMNS + [f"lm_{i:02d}_{axis}"
                           for i in range(pose_common.NUM_LANDMARKS)
-                          for axis in ("x", "y", "z")]
+                          for axis in ("x", "y", "z")] + ["pose_flags"]
 
 
 def output_paths(csv_path):
@@ -78,6 +88,7 @@ def _csv_row(result, frame_w, frame_h):
         lm = pose[i] if i < len(pose) else None
         for axis in ("x", "y", "z"):
             row[f"lm_{i:02d}_{axis}"] = round(getattr(lm, axis), 6) if lm is not None else ""
+    row["pose_flags"] = pose_check.describe(result.pose_flags)
     return row
 
 
@@ -116,6 +127,11 @@ def row_point(row, prefix):
     return None if x is None or y is None else (int(x), int(y))
 
 
+def row_flags(row):
+    """A row's pose_flags as {landmark index: check name} (empty for older CSVs)."""
+    return pose_check.parse(row.get("pose_flags") or "")
+
+
 def row_pose(row):
     """A row's landmarks as a 33-entry pose (pose_common layout), or None if empty."""
     pose = []
@@ -144,6 +160,12 @@ def write_timing(job):
         "timing_note": job.timing_note if job.timing_source == "auto" else "",
         "endpoint_behavior": job.endpoint_behavior,
         "review": job.review,
+        "model_strength": job.model_strength,
+        "pose_check": {
+            "result": report.pose_check_text(job),
+            "processing": (job.analysis_meta.get("pose_check") or {}).get("result", ""),
+            **pose_check.summary(job.pose_flags),
+        },
     }
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
@@ -186,7 +208,8 @@ def save_job(job, on_progress=None):
             ret, frame_bgr = cap.read()
             if ret:
                 annotated, skeleton = annotate.render_frame(
-                    frame_bgr, result, job.walk_start, job.walk_end, with_skeleton=True)
+                    frame_bgr, result, job.walk_start, job.walk_end, with_skeleton=True,
+                    model_strength=job.model_strength)
                 for writer, img in zip(writers, (annotated, skeleton)):
                     if writer is not None:
                         writer.write(img)

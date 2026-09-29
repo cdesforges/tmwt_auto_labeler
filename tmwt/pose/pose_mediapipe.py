@@ -6,6 +6,8 @@ layout described in pose_common.py (heels and "foot index" included); the two
 small-toe slots it doesn't predict are padded with None.
 """
 
+import os
+
 import cv2
 import mediapipe as mp
 
@@ -13,6 +15,15 @@ from tmwt.pose.pose_common import NUM_LANDMARKS
 
 # Default model path (relative to the project root).
 DEFAULT_MODEL_PATH = "models/pose_landmarker_full.task"
+
+
+def heavier_model(model_path):
+    """The "heavy" MediaPipe model next to a "lite" / "full" one, if that file exists; else None."""
+    for lighter in ("_lite.task", "_full.task"):
+        if str(model_path).endswith(lighter):
+            heavier = str(model_path)[:-len(lighter)] + ("_full.task" if lighter == "_lite.task" else "_heavy.task")
+            return heavier if os.path.exists(heavier) else None
+    return None
 
 def set_device(device):
     """MediaPipe's Python pose landmarker runs on the CPU; the device is ignored."""

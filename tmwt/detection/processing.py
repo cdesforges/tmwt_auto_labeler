@@ -7,6 +7,14 @@ Used by process.py (e.g. on a cluster: console output only) and by
 label.py (locally, with progress in the window). Videos that already have a
 usable analysis file made with the same settings are skipped, so an interrupted
 run can simply be started again.
+
+After each video, the walking subject's pose is checked for implausible points
+(pose_check.py). If any are found, the video is processed again with the
+backend's heavier model (e.g. rtmlib "balanced" -> "performance"), and that
+result is the one kept. The model used in the end ("model_strength") and the
+checks' results ("pose_check") are recorded in the analysis file, and
+tmwt_analysis/processing_report.csv / .md list every video, including any
+whose anomalies remain for the reviewer to confirm.
 """
 
 import os
@@ -16,9 +24,10 @@ import cv2
 import numpy as np
 
 from tmwt.detection import analysis
-from tmwt.core import analysis_file
-from tmwt.detection import people
+from tmwt.core import analysis_file, report
+from tmwt.detection import people, pose_check
 from tmwt.pose import pose_common
+from tmwt.pose.pose_backend import heavier_model, model_strength
 from tmwt.core.job import STATUS_FAILED, VideoJob
 from tmwt.ui.labeler_ui import WindowClosed
 from tmwt.ui.sidebar import DONE, FAILED, WORKING
@@ -104,6 +113,7 @@ def process_all(videos, backend, backend_name, model_path, matte_crop=True,
             ui.set_state(i, DONE, "already processed")
     if not todo:
         print("All videos already processed.")
+        report.write_processing_report(videos)
         return False
 
     load_pose_model(backend, backend_name, model_path, ui)
@@ -118,9 +128,12 @@ def process_all(videos, backend, backend_name, model_path, matte_crop=True,
             ui.active = i
             ui.set_state(i, WORKING, "starting...")
             ui.show_progress(title, subtitle, 0.0, force=True, cancellable=True)
+        pose_meta = {}
         try:
             analysis.process_video(job, model_path, backend, matte_crop,
                                    _progress_callback(ui, i, title, subtitle))
+            job, pose_meta = _check_pose(job, backend, backend_name, model_path, matte_crop,
+                                         ui, i, subtitle)
         except Cancelled:
             print("  Processing cancelled by user.")
             for k in todo[n:]:
@@ -133,7 +146,7 @@ def process_all(videos, backend, backend_name, model_path, matte_crop=True,
             traceback.print_exc()
             job.status, job.error = STATUS_FAILED, f"error: {e}"
 
-        path = analysis_file.save(job, provenance)
+        path = analysis_file.save(job, dict(provenance, **pose_meta))
         if job.status == STATUS_FAILED:
             print(f"  FAILED: {job.error}")
         else:
@@ -141,7 +154,62 @@ def process_all(videos, backend, backend_name, model_path, matte_crop=True,
         if ui is not None:
             ui.set_state(i, *((FAILED, job.error) if job.status == STATUS_FAILED
                               else (DONE, "processed")))
+    report.write_processing_report(videos)
     return False
+
+
+def _check_pose(job, backend, backend_name, model_path, matte_crop, ui, i, subtitle):
+    """
+    Check the subject's pose; if anything is implausible, process the video
+    again with the backend's heavier model and keep that result.
+
+    Returns:
+        (job, meta): the job to save (the heavier model's, if it ran), and the
+        analysis-file entries "model_strength" and "pose_check" (the result —
+        "ok", "fixed by heavier model", "anomalies remain", or "anomalies
+        remain (no heavier model)" — and each run's summary).
+    """
+    if job.status == STATUS_FAILED:
+        return job, {}
+    flags = _subject_flags(job)
+    runs = [dict(model_strength=model_strength(model_path), **pose_check.summary(flags))]
+    used = model_path
+    if not flags:
+        result = "ok"
+    else:
+        heavier = heavier_model(backend, model_path)
+        print(f"  Pose anomalies in {runs[0]['flagged_frames']} frame(s): "
+              + _examples(runs[0]))
+        if heavier is None:
+            result = "anomalies remain (no heavier model)"
+            print("  No heavier model to retry with; the anomalies are left for review.")
+        else:
+            print(f"  Re-analysing with the heavier model ({heavier})...")
+            load_pose_model(backend, backend_name, heavier, ui)
+            retry = VideoJob(path=job.path, output_path="", name=job.name)
+            analysis.process_video(retry, heavier, backend, matte_crop,
+                                   _progress_callback(ui, i, f"Re-analysing {job.name} (heavier model)",
+                                                      subtitle))
+            if retry.status == STATUS_FAILED:
+                result = f"anomalies remain (heavier model failed: {retry.error})"
+                print(f"  Heavier model failed ({retry.error}); keeping the first result.")
+            else:
+                flags = _subject_flags(retry)
+                runs.append(dict(model_strength=model_strength(heavier), **pose_check.summary(flags)))
+                job, used = retry, heavier
+                result = "anomalies remain" if flags else "fixed by heavier model"
+                print(f"  Heavier model: {result}"
+                      + (f" ({runs[-1]['flagged_frames']} frame(s): {_examples(runs[-1])})" if flags else ""))
+    return job, {"model_strength": model_strength(used), "pose_check": {"result": result, "runs": runs}}
+
+
+def _subject_flags(job):
+    """The walking subject's implausible pose points (none if nobody was seen)."""
+    return job.pose_flags if analysis.choose_subject(job) is not None else []
+
+
+def _examples(run, n=3):
+    return ", ".join(f"{e['landmark']} at {e['time_s']:.2f}s" for e in run["examples"][:n])
 
 
 def _progress_callback(ui, i, title, subtitle):

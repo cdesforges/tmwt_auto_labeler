@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from tmwt.pose import pose_common
-from tmwt.detection import tracking
+from tmwt.detection import pose_check, tracking
 
 # Most people detected per frame.
 MAX_PEOPLE = 5
@@ -185,7 +185,8 @@ def choose_subject(tracks, frames, frame_shape):
 def set_subject(job, track):
     """
     Make `track` the subject: fill each frame's pose, body point and
-    reference-frame positions from that person (None where they weren't seen).
+    reference-frame positions from that person (None where they weren't seen),
+    and check that person's pose for implausible points (pose_check.py).
     """
     job.subject = track.id if track is not None else None
     shape = job.info.first_frame.shape
@@ -194,6 +195,11 @@ def set_subject(job, track):
         f.pose = f.people[k] if k is not None else None
         f.body_px = pose_common.ankle_midpoint(f.pose, shape) if f.pose is not None else None
         _locate_in_reference_frame(f, shape)
+    # Plausibility of this person's pose (another subject has other flags).
+    job.pose_flags = pose_check.check(job.frames, shape)
+    flags = pose_check.by_frame(job.pose_flags)
+    for k, f in enumerate(job.frames):
+        f.pose_flags = flags.get(k, {})
 
 
 def subject_start(job):

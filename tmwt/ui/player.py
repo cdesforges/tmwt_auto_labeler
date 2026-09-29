@@ -57,20 +57,30 @@ class PlaybackClock:
         self._video_t0 = None
 
 
-def seek_state(times, k, marks=()):
+def seek_state(times, k, marks=(), flagged=()):
     """
     LabelerUI.show_frame's `seek` (a seek_bar.SeekState) for frame k of a clip
     whose frames are at `times` (seconds): its position, `marks` as Markers,
     the time as elapsed / total, and — if a mark's nearest frame is frame k —
     that mark's colour to fill the playhead with. A mark is (time, colour), or
     (time, colour, id) to make it draggable; marks with no time, or outside the
-    clip, aren't shown.
+    clip, aren't shown. `flagged` frame indices (pose points flagged) become
+    orange stretches: each frame covers from its time to the next frame's.
     """
     t0, span = times[0], max(times[-1] - times[0], 1e-6)
     shown = [m for m in marks if m[0] is not None and t0 <= m[0] <= times[-1]]
     markers = [Marker((m[0] - t0) / span, m[1], m[2] if len(m) > 2 else None) for m in shown]
     fill = next((m[1] for m in shown if nearest_frame(times, m[0]) == k), None)
-    return SeekState((times[k] - t0) / span, markers, f"{times[k] - t0:5.2f} / {span:5.2f} s", fill)
+    stretches = []
+    for j in sorted(flagged):
+        a = (times[j] - t0) / span
+        b = (times[min(j + 1, len(times) - 1)] - t0) / span
+        if stretches and a <= stretches[-1][1] + 1e-9:
+            stretches[-1] = (stretches[-1][0], b)        # extends the previous stretch
+        else:
+            stretches.append((a, b))
+    return SeekState((times[k] - t0) / span, markers, f"{times[k] - t0:5.2f} / {span:5.2f} s",
+                     fill, stretches)
 
 
 def nearest_frame(times, t):
@@ -86,9 +96,14 @@ def seek_index(times, fraction):
 class Player:
     """Position, pause state and transport controls for one clip (see module docs)."""
 
-    def __init__(self, times):
-        """`times`: every frame's time in seconds. Space always plays / pauses."""
+    def __init__(self, times, flagged=()):
+        """
+        `times`: every frame's time in seconds; `flagged`: indices of frames to
+        show orange on the seek bar (flagged pose points). Space always plays /
+        pauses.
+        """
         self.times = times
+        self.flagged = set(flagged)
         self.k = 0
         self.paused = False
         self._resume_after_seek = None      # set while the seek bar is dragged
@@ -132,7 +147,7 @@ class Player:
         keys = {KEY_LEFT: "back", KEY_RIGHT: "forward", **(hotkeys or {})}
         dialogs = ui.dialogs_shown
         value, pressed_at = ui.show_frame(image, wait_ms, specs, label, hotkeys=keys,
-                                          seek=seek_state(self.times, self.k, marks), alert=alert)
+                                          seek=seek_state(self.times, self.k, marks, self.flagged), alert=alert)
         if ui.dialogs_shown != dialogs:
             self._clock.restart()                    # a dialog paused everything: carry on from here
         if self._apply(value):
