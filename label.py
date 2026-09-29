@@ -1,7 +1,7 @@
 """
 TMWT Labeler — times 10 m walk test videos from pose tracking.
 
-Processes every video in an input directory in three phases, in one window
+Processes every video in an input directory in four phases, in one window
 (labeler_ui.py) that lists every file colour-coded by state:
 
   1. Analyse (analysis.py) — unattended. Per video: find the rope endpoints,
@@ -9,7 +9,10 @@ Processes every video in an input directory in three phases, in one window
      walk start and end in hindsight (timing.py).
   2. Review (review.py) — each video plays back in real time and pauses for
      the user to approve it, fix the endpoints, time it manually, or reject it.
-  3. Report (report.py) — labeling_report.csv / .md summarise every video.
+     Nothing is written yet, so there's no wait between videos.
+  3. Save (data_export.py) — write the outputs of every video that wasn't
+     rejected, all in one go.
+  4. Report (report.py) — labeling_report.csv / .md summarise every video.
 
 --no_display skips the window and the review: automatic results are saved
 unreviewed, and videos that need clicks are reported as failed.
@@ -31,7 +34,7 @@ import analysis
 import data_export
 import pose_common
 import review
-from job import (REVIEW_REJECTED, STATUS_FAILED, STATUS_INCOMPLETE,
+from job import (REVIEW_APPROVED, REVIEW_REJECTED, STATUS_FAILED, STATUS_INCOMPLETE,
                  STATUS_NEEDS_INPUT, STATUS_OK, VideoJob)
 from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ENTER, KEY_ESC, NEEDS_INPUT,
                         ORANGE, RED, UNREVIEWED, WHITE, WORKING, LabelerUI)
@@ -129,7 +132,7 @@ def _analysis_state(job):
     return FAILED, job.error
 
 
-# --- Phases 2 and 3 ------------------------------------------------------------
+# --- Phases 2 to 4 -------------------------------------------------------------
 
 def ask_to_review(ui, jobs):
     """
@@ -160,16 +163,29 @@ def run_review(jobs, ui):
             return
 
 
-def save_unreviewed(jobs, ui):
-    """Save the automatic results of every job not already saved or rejected."""
-    for i, job in enumerate(jobs):
-        if job.saved or job.review == REVIEW_REJECTED or job.far_ep is None:
-            continue
-        print(f"\n  Saving unreviewed: {job.name}")
+def save_outputs(jobs, ui):
+    """
+    Phase 3: write the outputs of every job that has endpoints and wasn't
+    rejected — approved ones and, if review was skipped or stopped early, the
+    automatic results of the rest (marked unreviewed).
+    """
+    to_save = [(i, job) for i, job in enumerate(jobs)
+               if job.review != REVIEW_REJECTED and job.far_ep is not None and job.frames]
+    for k, (i, job) in enumerate(to_save):
+        approved = job.review == REVIEW_APPROVED
+        print(f"\n  Saving ({k + 1}/{len(to_save)}): {job.name}"
+              + ("" if approved else " (not reviewed)"))
         if ui is None:
             data_export.save_job(job)
+            continue
+        ui.active = i
+        note = ui.notes[i]
+        ui.set_state(i, WORKING, "saving...")
+        data_export.save_job(job, on_progress=lambda frac: ui.show_progress(
+            f"Saving {job.name}", f"{k + 1} of {len(to_save)}", frac))
+        if approved:
+            ui.set_state(i, DONE, note)
         else:
-            review.save_with_progress(job, ui, i)
             ui.set_state(i, UNREVIEWED, "saved (not reviewed)")
 
 
@@ -237,7 +253,7 @@ def main():
     cancelled = run_analysis(jobs, ui, model_path, backend, not args.no_matte_crop)
     if ui is not None and not cancelled and ask_to_review(ui, jobs):
         run_review(jobs, ui)
-    save_unreviewed(jobs, ui)
+    save_outputs(jobs, ui)
     report_path, _ = report.write_report(jobs, output_dir, args.backend)
     if ui is not None:
         show_summary(ui, jobs, report_path)

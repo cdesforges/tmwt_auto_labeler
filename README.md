@@ -19,6 +19,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+The labeler's window uses [pygame](https://www.pygame.org), installed by
+`requirements.txt`. OpenCV's own windows aren't used for it: on macOS they
+report mouse clicks in the wrong place. The window can be resized freely; the
+picture scales to fit and clicks stay accurate.
+
 ### Optional pose backends
 
 The default backend is MediaPipe and is installed by `requirements.txt`. Two
@@ -103,7 +108,8 @@ matte cropping existed. Pass `--no_content_crop` to see the full recorded frame.
 
 ## How a run works
 
-A run processes every video in `--input_dir` in three phases, all in one window.
+A run processes every video in `--input_dir` in four phases, all in one
+resizable window.
 Every choice is an on-screen button: a click counts when the mouse is released
 over the same button it was pressed on. Most buttons also have a keyboard
 shortcut, shown on the button. The right-hand sidebar lists every file,
@@ -123,14 +129,17 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
 
    | Button (key) | What happens |
    |---|---|
-   | Looks good (`1` / Enter) | Outputs are saved and the video is marked approved. |
+   | Looks good (`1` / Enter) | The video is marked approved and the next one starts right away. |
    | Rope endpoints inaccurate (`2`) | Click the far (start) and near (finish) endpoints on the first frame, then **Confirm**, **Redo** or **Cancel**. Timing is recomputed from the cached analysis and the video replays. |
    | Walk start/stop inaccurate (`3`) | The video replays in real time. Click **Mark start** when the walk starts and **Mark stop** when it ends (Space also works). The mark uses the frame on screen when the button was pressed. |
    | Body not detected (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
    | Replay (`R`) | Play the video again. |
-   | Quit review (Esc) | The remaining videos are saved with their automatic results, marked unreviewed. |
+   | Quit review (Esc) | Review stops; the remaining videos keep their automatic results, marked unreviewed. |
 
-3. **Report.** `labeling_report.csv` and `labeling_report.md` summarise every
+3. **Save.** Once review is finished, the outputs of every video that wasn't
+   rejected are written in one go, with a progress bar. Nothing is written
+   during review, so there's no wait between videos.
+4. **Report.** `labeling_report.csv` and `labeling_report.md` summarise every
    video (see [Output](#output)).
 
 ## Endpoint detection
@@ -237,7 +246,8 @@ metric.py            # Geometry: t_along and perspective-correct distance along 
 onset.py             # Hindsight walk-start detection on distance signals
 timing.py            # Walk start/end from the analysed frames
 review.py            # Phase 2: real-time playback and the review flow
-labeler_ui.py        # The labeler's single window: progress, playback, clicks, prompt, sidebar
+labeler_ui.py        # The labeler's screens: progress, playback, buttons, endpoint picking, sidebar
+window.py            # Resizable pygame window: shows a canvas scaled to fit, input in canvas pixels
 annotate.py          # Frame drawing (skeleton, rope, info panel) shared with view.py
 data_export.py       # Per-video outputs (CSV, timing JSON, videos) and reading them back
 report.py            # End-of-run labeling report

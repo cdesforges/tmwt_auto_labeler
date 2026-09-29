@@ -7,7 +7,7 @@ A job moves through the run like this:
   analysis.analyze_job  -> fills info, frames and (if found automatically) the
                            endpoints and timing; sets `status`
   review.review_job     -> may change endpoints / timing; sets `review`
-  data_export.save_job  -> writes the outputs; sets `saved`
+  data_export.save_job  -> writes the outputs after all reviews; sets `saved`
   report.write_report   -> summarises every job
 """
 

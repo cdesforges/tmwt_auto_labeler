@@ -3,6 +3,11 @@ The labeler's single window. Nothing else in the labeler opens a window, and
 every choice the user makes is a clickable button (most also have an optional
 keyboard shortcut).
 
+Screens are drawn with OpenCV into a fixed-size canvas (MAIN_W + SIDEBAR_W by
+MAIN_H) and shown in a resizable window (window.py), which scales the canvas
+to fit and reports mouse positions in canvas pixels. So all layout and
+hit-testing here is in canvas pixels, whatever size the window is.
+
 Two regions:
   - Main area (left): analysis progress, real-time playback, endpoint picking,
     the review prompt and messages.
@@ -19,10 +24,11 @@ returned when it is chosen, and the key codes that also choose it.
 """
 
 import time
-from collections import deque
 
 import cv2
 import numpy as np
+
+from window import Window
 
 WINDOW = "TMWT Labeler"
 MAIN_W, MAIN_H = 960, 720
@@ -38,8 +44,8 @@ ORANGE = (0, 150, 255)
 RED = (60, 60, 255)
 BLUE = (255, 0, 0)
 
-# Key codes returned by cv2.waitKey (masked to 8 bits).
-KEY_NONE = 255
+# Key codes, as returned by Window.poll (cv2.waitKey style). Closing the window
+# arrives as KEY_ESC.
 KEY_ESC = 27
 KEY_ENTER = (13, 10)
 KEY_BACKSPACE = (8, 127)
@@ -219,22 +225,9 @@ class LabelerUI:
         self.notes = [""] * len(self.names)
         self.active = None            # index of the highlighted file, or None
         self._last_progress_draw = 0.0
-        self._mouse_pos = None        # latest pointer position, window pixels
-        self._mouse_events = deque()  # ("down" | "up", (x, y)) not yet handled
         self._armed = None            # value of the button the mouse is pressed on
         self._armed_at = None         # when that press happened (perf_counter)
-        cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(WINDOW, MAIN_W + SIDEBAR_W, MAIN_H)
-        cv2.setMouseCallback(WINDOW, self._on_mouse)
-
-    def _on_mouse(self, event, x, y, flags, param):
-        # OpenCV calls this from inside cv2.waitKey, so events are queued and
-        # handled by whichever screen is showing once waitKey returns.
-        self._mouse_pos = (x, y)
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self._mouse_events.append(("down", (x, y)))
-        elif event == cv2.EVENT_LBUTTONUP:
-            self._mouse_events.append(("up", (x, y)))
+        self._window = Window(WINDOW, MAIN_W + SIDEBAR_W, MAIN_H)
 
     # --- Sidebar ---------------------------------------------------------------
 
@@ -286,18 +279,18 @@ class LabelerUI:
     # --- Showing a screen and handling input -----------------------------------
 
     def _show(self, main, wait_ms):
-        """Display `main` + sidebar and wait up to wait_ms for a key (KEY_NONE if none)."""
-        cv2.imshow(WINDOW, np.hstack([main, self._sidebar()]))
-        return cv2.waitKey(max(1, int(wait_ms))) & 0xFF
+        """Display `main` + sidebar and wait up to wait_ms for a key (window.KEY_NONE if none)."""
+        self._window.show(np.hstack([main, self._sidebar()]))
+        return self._window.poll(wait_ms)
 
     def _new_screen(self):
         """Forget clicks and presses left over from the previous screen."""
-        self._mouse_events.clear()
+        self._window.mouse_events.clear()
         self._armed = self._armed_at = None
 
     def _draw_buttons(self, img, buttons):
         for b in buttons:
-            over = b.contains(self._mouse_pos)
+            over = b.contains(self._window.mouse_pos)
             if self._armed == b.value:
                 state = "pressed" if over else "normal"
             else:
@@ -311,7 +304,7 @@ class LabelerUI:
         Returns:
             (value, pressed_at, other_clicks): the chosen button's value (or
             None), when it was pressed (perf_counter), and mouse presses that
-            didn't land on a button (window pixels).
+            didn't land on a button (canvas pixels).
         """
         now = time.perf_counter()
         for b in buttons:
@@ -319,8 +312,9 @@ class LabelerUI:
                 return b.value, now, []
         chosen = pressed_at = None
         other_clicks = []
-        while self._mouse_events:
-            kind, pt = self._mouse_events.popleft()
+        events = self._window.mouse_events
+        while events:
+            kind, pt = events.popleft()
             hit = next((b for b in buttons if b.contains(pt)), None)
             if kind == "down":
                 if hit is None:
@@ -366,7 +360,7 @@ class LabelerUI:
         buttons = button_row([("Cancel", "cancel", (KEY_ESC,))], MAIN_H - 90) if cancellable else []
         now = time.perf_counter()
         if not force and now - self._last_progress_draw < _PROGRESS_REDRAW_S:
-            value, _, _ = self._handle_input(buttons, cv2.waitKey(1) & 0xFF)
+            value, _, _ = self._handle_input(buttons, self._window.poll(0))
             return value == "cancel"
         self._last_progress_draw = now
 
@@ -506,4 +500,4 @@ class LabelerUI:
                     points.append((int(round(fx)), int(round(fy))))
 
     def close(self):
-        cv2.destroyWindow(WINDOW)
+        self._window.close()

@@ -3,7 +3,7 @@ Phase 2 of a run: review each analysed video with the user.
 
 Each video plays back in real time with its detection drawn on, then pauses on
 a prompt (LabelerUI.ask_review):
-  - Looks good               -> outputs are saved
+  - Looks good               -> approved (outputs are written after review)
   - Rope endpoints inaccurate -> click new endpoints; timing is recomputed from
                                 the cached analysis and the video replays
   - Walk start/stop inaccurate -> replay, marking the start and stop with a button
@@ -15,7 +15,6 @@ import time
 from collections import deque
 
 import annotate
-import data_export
 import timing
 import video_io
 from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED
@@ -62,7 +61,6 @@ def review_job(job, ui, i):
                 replay = False
                 continue
             job.review = REVIEW_APPROVED
-            save_with_progress(job, ui, i)
             ui.set_state(i, DONE, f"approved  {job.duration:.2f}s")
             return None
         if choice == "endpoints":
@@ -200,13 +198,6 @@ def summary_lines(job):
         end = f"{job.walk_end:.2f}s" if job.walk_end is not None else "not found"
         lines.append(f"Timing incomplete: start {start}, end {end}")
     return lines
-
-
-def save_with_progress(job, ui, i):
-    """Save the job's outputs while showing a progress bar."""
-    ui.set_state(i, WORKING, "saving...")
-    data_export.save_job(job, on_progress=lambda frac: ui.show_progress(
-        f"Saving {job.name}", "Writing CSV, timing and annotated videos", frac))
 
 
 def _set_manual_endpoints(job, ui, reason=None, previous=None):
