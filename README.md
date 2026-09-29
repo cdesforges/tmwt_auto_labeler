@@ -323,7 +323,9 @@ analysis file. `tmwt_analysis/processing_report.csv` / `.md` list every video,
 and any whose anomalies remain are also printed at the end of the run — no
 questions are asked, so it runs unattended (e.g. under SLURM).
 
-**At review**, a video whose anomalies remain opens in **flagged-points
+**At review**, opening a video whose anomalies remain (every time, including
+a video reviewed before) shows a full-screen notice listing the flagged points
+and the model used; **Review flagged points** then opens **flagged-points
 mode**, paused on the first flagged frame:
 - the flagged points (and their lines) are **orange**, the timeline is orange
   over those frames, and the info panel names the points (it lists the model

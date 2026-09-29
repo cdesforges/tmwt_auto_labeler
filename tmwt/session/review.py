@@ -13,7 +13,8 @@ a prompt (LabelerUI.ask_review):
 A video in which nobody was detected at all only offers "Skip this file".
 
 If the pose check (pose_check.py) flagged points the heavier model couldn't
-fix, the video opens in flagged-points mode (review_flagged_points): paused on
+fix, opening the video shows a full-screen notice about them, then goes into
+flagged-points mode (review_flagged_points): paused on
 the first flagged frame, with buttons to jump between flagged frames, Smooth
 points / Unsmooth (pose_smoothing.py; smoothed points turn yellow) and
 Confirm, which goes on to the timing playback. "Review flagged points" on the
@@ -82,7 +83,8 @@ def review_job(job, ui, i):
 
     note = None
     replay = True
-    if job.pose_flags and not job.pose_confirmed:
+    if job.pose_flags:
+        _alert_pose_flags(job, ui)
         review_flagged_points(job, ui)
     if job.far_ep is None or job.near_ep is None:
         reason = f"{job.name}: automatic detection failed ({job.endpoint_problem})"
@@ -143,6 +145,29 @@ def review_job(job, ui, i):
         elif choice == "quit":
             return QUIT
         # "replay" loops round and plays again.
+
+
+def _alert_pose_flags(job, ui):
+    """Full-screen notice, when a video with flagged pose points is opened, before flagged-points mode."""
+    flags = job.pose_flags
+    examples = sorted({(round(fl.time_s, 2), pose_check.LANDMARK_NAMES[fl.landmark].replace("_", " "))
+                       for fl in flags})[:3]
+    check = job.analysis_meta.get("pose_check") or {}
+    retried = len(check.get("runs", [])) > 1
+    lines = [
+        ("Pose detection anomalies", ORANGE),
+        (f"{job.pose_flagged_frames} frame(s) have leg or foot points that look implausible,", GREY),
+        ("e.g. " + ", ".join(f"{name} at {t:.2f}s" for t, name in examples) + ".", GREY),
+        (f"Model strength: {job.model_strength}"
+         + (" (re-analysed with the heavier model; these remain)." if retried else "."), GREY),
+    ]
+    if job.pose_edits:
+        lines.append((f"{len(job.pose_edits)} of them were smoothed earlier (yellow).", GREY))
+    lines += [
+        ("Next: check them frame by frame (orange), smooth them if needed, then confirm.", GREY),
+    ]
+    ui.show_message(lines, [("Review flagged points", "review", KEY_ENTER)],
+                    background=job.info.first_frame)
 
 
 # Flagged-points mode: jump between flagged frames ([ and ]).
