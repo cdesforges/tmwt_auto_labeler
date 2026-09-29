@@ -49,9 +49,6 @@ Things to know:
   run can be restarted. `--reprocess` forces everything to run again.
 - **Same OpenCV version.** Review re-reads frames and must see the same frames as
   processing did, so use the same OpenCV version on both machines.
-- **Cluster results vs. local.** A GPU or CPU gives very slightly different
-  numbers from CoreML on a Mac, which can shift timings a little. Worth one
-  check on a few videos processed both ways.
 - **No internet on compute nodes?** Run `python process.py --download_models`
   once on a node that has internet. rtmlib caches models in `$TORCH_HOME/hub`, else
   `$XDG_CACHE_HOME/rtmlib/hub`, else `~/.cache/rtmlib/hub`; point these at a shared
@@ -91,8 +88,7 @@ pip install -r requirements-cluster.txt
 ```
 
 The review window uses [pygame](https://www.pygame.org), installed by
-`requirements.txt`. OpenCV's own windows aren't used: on macOS they report mouse
-clicks in the wrong place. The window runs in its own small process, because
+`requirements.txt`. The window runs in its own small process, because
 OpenCV and pygame bundle different versions of SDL2 that conflict when loaded
 together. It can be resized freely; the picture scales to fit and clicks stay
 accurate.
