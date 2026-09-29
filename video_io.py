@@ -7,7 +7,6 @@ frame with picture content and the matte crop — and open_video reopens the
 video with those settings applied.
 """
 
-import time
 from dataclasses import dataclass
 
 import cv2
@@ -89,24 +88,6 @@ def _first_content_frame(cap):
         if frame.mean() >= BLACK_FRAME_MEAN:
             return idx, frame
         idx += 1
-
-
-class PlaybackClock:
-    """Paces playback to the video's own timestamps so it runs in real time."""
-
-    def __init__(self):
-        self._video_t0 = None
-        self._wall_t0 = None
-
-    def ms_until(self, time_s):
-        """Milliseconds to wait before showing the frame at video time `time_s`."""
-        if self._video_t0 is None:
-            self._video_t0, self._wall_t0 = time_s, time.perf_counter()
-        return (self._wall_t0 + (time_s - self._video_t0) - time.perf_counter()) * 1000.0
-
-    def restart(self):
-        """Re-anchor after a pause, so the next frame plays immediately."""
-        self._video_t0 = None
 
 
 class FrameSource:

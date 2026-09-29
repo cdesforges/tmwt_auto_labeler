@@ -33,12 +33,10 @@ import numpy as np
 import annotate
 import data_export
 import timing
-import video_io
 from job import COURSE_M
-from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ESC, KEY_SPACE, RED, UNREVIEWED,
-                        WAITING, WHITE, JumpTo, LabelerUI, WindowClosed, seek_index,
-                        seek_state)
-from window import KEY_LEFT, KEY_RIGHT
+from labeler_ui import DONE, FAILED, UNREVIEWED, WAITING, JumpTo, LabelerUI, WindowClosed
+from player import Player
+from widgets import GREEN, GREY, KEY_ESC, RED, WHITE
 
 # Sidebar legend for the viewer.
 LEGEND = [("approved", GREEN), ("not reviewed", GREY), ("incomplete", RED),
@@ -145,9 +143,6 @@ class Recording:
     def time_at(self, k):
         return self.rows[k].get("time_s") or 0.0
 
-    def seek_bar(self, k):
-        """The seek bar at frame k, with the walk's start (green) and end (red) marked."""
-        return seek_state(self.times, k, [(self.walk_start, GREEN), (self.walk_end, RED)])
 
     def describe(self):
         """Console summary of the recording."""
@@ -184,56 +179,26 @@ def play(ui, recording, index, count):
     if not recording.rows:
         print("  No frame data found.")
         return index + 1 if index + 1 < count else None
-    last = len(recording.rows) - 1
-    hotkeys = {KEY_LEFT: "back", KEY_RIGHT: "forward", KEY_ESC: "quit"}
     ui.active = index
     ui.start_playback()
-    clock = video_io.PlaybackClock()
-    paused = False
-    was_playing = None     # while the seek bar is dragged: whether to resume after
-    k = 0
+    player = Player(recording.times)
     while True:
-        specs = [("Previous recording", "previous", (ord("p"), ord("P")), "prev_video"),
-                 ("Back one frame", "back", (), "prev_frame"),
-                 ("Play" if paused else "Pause", "toggle", (KEY_SPACE,), "play" if paused else "pause"),
-                 ("Forward one frame", "forward", (), "next_frame"),
-                 ("Next recording", "next", (ord("n"), ord("N")), "next_video")]
-        if was_playing is not None:
-            wait = 20        # dragging: keep up with the mouse
-        else:
-            wait = 50 if paused else clock.ms_until(recording.time_at(k))
-        value, _ = ui.show_frame(recording.render(k), wait, specs, hotkeys=hotkeys,
-                                 seek=recording.seek_bar(k))
-
-        if isinstance(value, tuple):          # the seek bar: ("seek" | "seek_end", fraction)
-            kind, fraction = value
-            k = seek_index(recording.times, fraction)
-            if was_playing is None:
-                was_playing = not paused
-            paused = True                     # hold still while dragging
-            if kind == "seek_end":
-                paused, was_playing = not was_playing, None
-                clock.restart()
-            continue
+        transport = player.transport()
+        specs = ([("Previous recording", "previous", (ord("p"), ord("P")), "prev_video")] + transport
+                 + [("Next recording", "next", (ord("n"), ord("N")), "next_video")])
+        value, _ = player.show(ui, recording.render(player.k), specs,
+                               marks=[(recording.walk_start, GREEN), (recording.walk_end, RED)],
+                               hotkeys={KEY_ESC: "quit"})
         if value == "quit":
             return None
         if value == "previous":
             return max(0, index - 1)
         if value == "next":
             return index + 1 if index + 1 < count else index
-        if value == "toggle":
-            paused = not paused
-            clock.restart()
-        elif value in ("back", "forward"):
-            paused = True                     # stepping pauses playback
-            k = max(0, k - 1) if value == "back" else min(last, k + 1)
-        elif not paused:
-            if k < last:
-                k += 1
-            elif index + 1 < count:
+        if not player.advance():
+            if index + 1 < count:
                 return index + 1              # on to the next recording
-            else:
-                paused = True                 # the last one: hold on its final frame
+            player.paused = True              # the last one: hold on its final frame
 
 
 def main():

@@ -18,9 +18,9 @@ import review_progress
 from job import (REVIEW_APPROVED, REVIEW_REJECTED, REVIEW_UNREVIEWED, STATUS_FAILED,
                  STATUS_INCOMPLETE, STATUS_NEEDS_INPUT, STATUS_NO_BODY, STATUS_OK,
                  VideoJob)
-from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ENTER, KEY_ESC, NEEDS_INPUT,
-                        ORANGE, RED, SAVED_MARK, UNREVIEWED, WHITE, WORKING, APPROVED_MARK,
-                        REJECTED_MARK, JumpTo, WindowClosed)
+from labeler_ui import (APPROVED_MARK, DONE, FAILED, NEEDS_INPUT, REJECTED_MARK, SAVED_MARK,
+                        UNREVIEWED, WORKING, JumpTo, WindowClosed)
+from widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE
 
 
 def make_jobs(videos, output_dir, endpoint_behavior):

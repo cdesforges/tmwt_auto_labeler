@@ -18,9 +18,6 @@ endpoints don't give a complete timing, the user is asked straight away to redo
 them, time the video manually, or skip it.
 """
 
-import time
-from collections import deque
-
 import cv2
 
 import annotate
@@ -28,10 +25,9 @@ import people
 import timing
 import video_io
 from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_NO_BODY
-from labeler_ui import (APPROVED_MARK, DONE, FAILED, GREEN, GREY, KEY_ENTER, KEY_ESC,
-                        KEY_SPACE, ORANGE, RED, REJECTED_MARK, WHITE, WORKING,
-                        seek_index, seek_state)
-from window import KEY_LEFT, KEY_RIGHT
+from labeler_ui import APPROVED_MARK, DONE, FAILED, REJECTED_MARK, WORKING
+from player import Player
+from widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, KEY_SPACE, ORANGE, RED, WHITE
 
 QUIT = "quit"
 # Outcomes of setting endpoints (_set_endpoints).
@@ -39,9 +35,6 @@ _REPLAY = "replay"        # complete timing found: play the video with it
 _PROMPT = "prompt"        # back to the review prompt without replaying
 _CANCELLED = "cancelled"  # the user cancelled endpoint picking
 _SKIP = "skip"            # the user chose to skip the file
-# Recent frames remembered during playback, to find what was on screen when a
-# mark button was pressed (a few seconds' worth).
-_SHOWN_HISTORY = 300
 
 
 def review_job(job, ui, i, start_at_menu=False):
@@ -144,14 +137,12 @@ def playback(job, ui, manual_timing=False):
     """
     Play the job back in real time with its detection drawn on. Below the
     picture: a seek bar (drag or click to scrub; the walk's start and end are
-    marked), frame-back / play-pause / frame-forward icons, Skip to review, and
-    in manual timing Mark start then Mark stop, and Done.
+    marked), frame-back / play-pause / frame-forward buttons (player.py), Skip to
+    review, and in manual timing Mark start then Mark stop, and Done.
 
     Frames come from a video_io.FrameSource, so scrubbing and stepping back show
-    exactly the frames the analysis used.
-
-    Marks use the frame on screen when the button was pressed (or Space was
-    hit), not when it was released, so the timing isn't delayed by the click.
+    exactly the frames the analysis used. Marks use the frame on screen when the
+    button was pressed (or Space was hit), not when it was released.
 
     Returns:
         (start, end, last_frame): the timing shown (the marks, in manual
@@ -164,93 +155,40 @@ def playback(job, ui, manual_timing=False):
         start, end = job.walk_start, job.walk_end
         waiting = annotate.WAITING_AUTO
     label = "MANUAL TIMING" if manual_timing else None
-    times = [f.time_s for f in job.frames]
-    hotkeys = {KEY_LEFT: "back", KEY_RIGHT: "forward"}
-
+    # In manual timing Space marks, so P pauses.
+    player = Player([f.time_s for f in job.frames],
+                    pause_keys=(ord("p"), ord("P")) if manual_timing else (KEY_SPACE,))
     source = video_io.FrameSource(job)
-    clock = video_io.PlaybackClock()
-    shown = deque(maxlen=_SHOWN_HISTORY)   # (perf_counter when shown, video time)
     ui.start_playback()
-    paused = False
-    was_playing = None     # while the seek bar is dragged: whether to resume after
     last = None
-    k = 0
     try:
-        while k < len(job.frames):
-            frame = source.get(k)
+        while True:
+            frame = source.get(player.k)
             if frame is None:
                 break
-            f = job.frames[k]
-            last, _ = annotate.render_frame(frame, f, start, end, waiting)
-            specs = _playback_buttons(manual_timing, paused, start, end)
-            if was_playing is not None:
-                wait_ms = 20           # dragging: keep up with the mouse
-            else:
-                wait_ms = 50 if paused else clock.ms_until(f.time_s)
-            shown.append((time.perf_counter(), f.time_s))
-            value, pressed_at = ui.show_frame(
-                last, wait_ms, specs, label, hotkeys=hotkeys,
-                seek=seek_state(times, k, [(start, GREEN), (end, RED)]))
+            last, _ = annotate.render_frame(frame, job.frames[player.k], start, end, waiting)
+            specs = player.transport() + [
+                ("Done (Enter)" if manual_timing else "Skip to review (Enter)", "skip", KEY_ENTER)]
+            if manual_timing and end is None:
+                specs.insert(0, ("Mark start (Space)" if start is None else "Mark stop (Space)",
+                                 "mark", (KEY_SPACE,)))
+            value, pressed_at = player.show(ui, last, specs, label, marks=[(start, GREEN), (end, RED)])
 
-            if isinstance(value, tuple):          # the seek bar: ("seek" | "seek_end", fraction)
-                kind, fraction = value
-                k = seek_index(times, fraction)
-                if was_playing is None:
-                    was_playing = not paused
-                paused = True                     # hold still while dragging
-                if kind == "seek_end":
-                    paused, was_playing = not was_playing, None
-                    clock.restart()
-                continue
             if value == "skip":
-                return start, end, last
-            if value == "toggle":
-                paused = not paused
-                clock.restart()
-                continue
-            if value in ("back", "forward"):
-                paused = True                     # stepping pauses playback
-                k = max(0, k - 1) if value == "back" else min(len(job.frames) - 1, k + 1)
-                continue
+                break
             if value == "mark":
-                t = _time_on_screen(shown, pressed_at)
+                t = player.time_on_screen(pressed_at)
                 if start is None:
                     start = t
                     print(f"  Walk STARTED (manual) at {start:.3f}s")
                 elif t > start:
                     end = t
                     print(f"  Walk FINISHED (manual) at {end:.3f}s")
-            if not paused:
-                k += 1
+            if not player.advance():
+                break
     finally:
         source.close()
     return start, end, last
-
-
-def _time_on_screen(shown, wall_time):
-    """Video time of the frame that was on screen at perf_counter time `wall_time`."""
-    t = shown[-1][1]
-    for shown_at, video_t in reversed(shown):
-        t = video_t
-        if shown_at <= wall_time:
-            break
-    return t
-
-
-def _playback_buttons(manual_timing, paused, start, end):
-    """Button specs for the playback bar in its current state."""
-    specs = []
-    if manual_timing and end is None:
-        text = "Mark start (Space)" if start is None else "Mark stop (Space)"
-        specs.append((text, "mark", (KEY_SPACE,)))
-    pause_keys = (ord("p"), ord("P")) if manual_timing else (KEY_SPACE,)
-    specs += [
-        ("Back one frame", "back", (), "prev_frame"),
-        ("Play" if paused else "Pause", "toggle", pause_keys, "play" if paused else "pause"),
-        ("Forward one frame", "forward", (), "next_frame"),
-        ("Done (Enter)" if manual_timing else "Skip to review (Enter)", "skip", KEY_ENTER),
-    ]
-    return specs
 
 
 def summary_lines(job):

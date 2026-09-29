@@ -19,8 +19,8 @@ Two regions:
       red    = failed or rejected
       grey   = saved without review
 
-Buttons are described by specs, (text, value, keys): the label, the value
-returned when it is chosen, and the key codes that also choose it.
+Drawing building blocks (colours, buttons, icons, the seek bar) are in
+widgets.py; playback controls are in player.py.
 
 During review, files in `review_targets` can be clicked in the sidebar. The
 click raises JumpTo from whatever screen is showing, so the caller (label.py)
@@ -33,28 +33,14 @@ import cv2
 import numpy as np
 
 import pose_common
+from widgets import (BAR_H, BTN_H, DIM, FONT, GREEN, GREY, HEADER_H, KEY_BACKSPACE,
+                     KEY_ENTER, KEY_ESC, MAIN_H, MAIN_W, ORANGE, RED, WHITE, YELLOW, BLUE,
+                     SEEK_H, Button, bar_buttons, button_row, dimmed, draw_seek_bar,
+                     frame_screen, on_seek_bar, put_centered, seek_fraction, truncate)
 from window import Window
 
 WINDOW = "TMWT Labeler"
-MAIN_W, MAIN_H = 960, 720
 SIDEBAR_W = 320
-FONT = cv2.FONT_HERSHEY_SIMPLEX
-
-WHITE = (255, 255, 255)
-GREY = (150, 150, 150)
-DIM = (90, 90, 90)
-YELLOW = (0, 255, 255)
-GREEN = (0, 200, 0)
-ORANGE = (0, 150, 255)
-RED = (60, 60, 255)
-BLUE = (255, 0, 0)
-
-# Key codes, as returned by Window.poll (cv2.waitKey style). Closing the window
-# arrives as KEY_ESC.
-KEY_ESC = 27
-KEY_ENTER = (13, 10)
-KEY_BACKSPACE = (8, 127)
-KEY_SPACE = ord(" ")
 
 # Sidebar states and their colours.
 WAITING = "waiting"
@@ -89,13 +75,6 @@ WRONG_PERSON_OPTION = ("5", "Wrong person tracked (pick the walker)", "person", 
 # Colours for telling people apart on the "pick the walker" screen.
 PERSON_COLORS = [(0, 255, 0), (255, 160, 0), (255, 0, 255), (0, 200, 255), (60, 60, 255)]
 
-# Layout.
-BTN_H = 44
-BAR_H = 64            # bottom button bar on image screens
-HEADER_H = 84         # instruction strip above the frame when picking endpoints
-_BTN_GAP = 16
-_BTN_MIN_W = 150
-
 # Review outcomes shown in the sidebar (LabelerUI.mark_reviewed): approved but
 # not yet saved (grey check), approved and saved to disk (green check), skipped
 # (red cross).
@@ -122,42 +101,7 @@ _DIM_MESSAGE = 0.25
 _DIM_PROMPT = 0.12
 
 
-# --- Drawing helpers -----------------------------------------------------------
-
-def _put_centered(img, text, y, scale, color, thickness=1):
-    (tw, _), _ = cv2.getTextSize(text, FONT, scale, thickness)
-    x = max(10, (img.shape[1] - tw) // 2)
-    cv2.putText(img, text, (x, y), FONT, scale, color, thickness, cv2.LINE_AA)
-
-
-def _truncate(text, max_w, scale, thickness=1):
-    """Shorten `text` with a trailing '...' until it fits in max_w pixels."""
-    if cv2.getTextSize(text, FONT, scale, thickness)[0][0] <= max_w:
-        return text
-    while text and cv2.getTextSize(text + "...", FONT, scale, thickness)[0][0] > max_w:
-        text = text[:-1]
-    return text + "..."
-
-
-def _fit(img, w, h):
-    """
-    Scale `img` to fit inside w x h (keeping aspect) and centre it on black.
-
-    Returns:
-        (canvas, scale, x0, y0): image pixel (x, y) lands at canvas pixel
-        (x * scale + x0, y * scale + y0).
-    """
-    canvas = np.zeros((h, w, 3), dtype=np.uint8)
-    if img is None:
-        return canvas, 1.0, 0, 0
-    ih, iw = img.shape[:2]
-    s = min(w / iw, h / ih)
-    nw, nh = max(1, int(iw * s)), max(1, int(ih * s))
-    interp = cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR
-    x0, y0 = (w - nw) // 2, (h - nh) // 2
-    canvas[y0:y0 + nh, x0:x0 + nw] = cv2.resize(img, (nw, nh), interpolation=interp)
-    return canvas, s, x0, y0
-
+# --- Sidebar drawing helpers ---------------------------------------------------
 
 def _dim(color):
     """A colour faded toward the sidebar background, for reviewed rows."""
@@ -175,192 +119,6 @@ def _draw_mark(img, outcome, center):
         cv2.line(img, (x - 6, y - 6), (x + 6, y + 6), RED, 2, cv2.LINE_AA)
         cv2.line(img, (x - 6, y + 6), (x + 6, y - 6), RED, 2, cv2.LINE_AA)
 
-
-def _dimmed(img, brightness):
-    """`img` fitted to the main area and darkened, as a background for text."""
-    return (_fit(img, MAIN_W, MAIN_H)[0] * brightness).astype(np.uint8)
-
-
-def _frame_screen(img, top=0, bottom=BAR_H):
-    """
-    Main-area canvas with `img` fitted between a `top` strip and a `bottom`
-    strip (the button bar, plus the seek bar if there is one). Returns
-    (canvas, scale, x0, y0) like _fit, in canvas pixels.
-    """
-    main = np.zeros((MAIN_H, MAIN_W, 3), dtype=np.uint8)
-    fitted, s, x0, y0 = _fit(img, MAIN_W, MAIN_H - top - bottom)
-    main[top:MAIN_H - bottom] = fitted
-    cv2.rectangle(main, (0, MAIN_H - bottom), (MAIN_W, MAIN_H), (20, 20, 20), -1)
-    return main, s, x0, y0 + top
-
-
-# Seek bar (show_frame's `seek`): its strip height, track ends and hit margin.
-SEEK_H = 34
-_SEEK_X0, _SEEK_X1 = 24, MAIN_W - 150
-_SEEK_Y = MAIN_H - BAR_H - SEEK_H // 2
-_SEEK_GRAB = 12     # how far above / below the track a press still grabs it
-
-
-def seek_state(times, k, marks=()):
-    """
-    show_frame's `seek` for frame k of a clip whose frames are at `times`
-    (seconds): its position, [(time, colour)] `marks` as markers, and the time
-    as elapsed / total.
-    """
-    t0, span = times[0], max(times[-1] - times[0], 1e-6)
-    markers = [((t - t0) / span, color) for t, color in marks if t is not None and t0 <= t <= times[-1]]
-    return (times[k] - t0) / span, markers, f"{times[k] - t0:5.2f} / {span:5.2f} s"
-
-
-def seek_index(times, fraction):
-    """The frame at `fraction` (0-1) of the way through a clip, by time."""
-    target = times[0] + fraction * (times[-1] - times[0])
-    return int(np.argmin(np.abs(np.asarray(times) - target)))
-
-
-def _seek_fraction(x):
-    """Position along the seek bar (0-1) for canvas x."""
-    return min(1.0, max(0.0, (x - _SEEK_X0) / (_SEEK_X1 - _SEEK_X0)))
-
-
-def _on_seek_bar(pt):
-    return (pt is not None and _SEEK_X0 - _SEEK_GRAB <= pt[0] <= _SEEK_X1 + _SEEK_GRAB
-            and abs(pt[1] - _SEEK_Y) <= _SEEK_GRAB)
-
-
-def _draw_seek_bar(img, fraction, markers, text, active):
-    """
-    The seek bar: track, played part, markers [(fraction, colour)], a handle at
-    `fraction` (bigger while hovered or dragged) and `text` at its right.
-    """
-    y = _SEEK_Y
-    x = int(_SEEK_X0 + fraction * (_SEEK_X1 - _SEEK_X0))
-    cv2.line(img, (_SEEK_X0, y), (_SEEK_X1, y), (70, 70, 70), 4, cv2.LINE_AA)
-    cv2.line(img, (_SEEK_X0, y), (x, y), (200, 200, 200), 4, cv2.LINE_AA)
-    for f, color in markers:
-        mx = int(_SEEK_X0 + f * (_SEEK_X1 - _SEEK_X0))
-        cv2.line(img, (mx, y - 8), (mx, y + 8), color, 2, cv2.LINE_AA)
-    cv2.circle(img, (x, y), 9 if active else 7, WHITE, -1, cv2.LINE_AA)
-    cv2.putText(img, text, (_SEEK_X1 + 18, y + 5), FONT, 0.5, GREY, 1, cv2.LINE_AA)
-
-
-class Button:
-    """
-    A clickable button drawn with OpenCV, behaving like a standard UI button:
-    it highlights on hover, looks pushed in (inset shadow, label shifted) while
-    held, and only counts as clicked if the mouse is released over it. Dragging
-    off before releasing cancels the click; dragging back on re-arms it.
-    """
-
-    # Fill / border colours per visual state.
-    _STYLES = {
-        "normal": ((48, 48, 48), (95, 95, 95)),
-        "hover": ((66, 66, 66), (170, 170, 170)),
-        "pressed": ((36, 36, 36), YELLOW),
-    }
-    # Inset shadow lines along the top and left edges when pressed, outermost first.
-    _SHADOW = ((0, 0, 0), (6, 6, 6), (12, 12, 12), (18, 18, 18), (24, 24, 24), (30, 30, 30))
-
-    def __init__(self, rect, text, value, keys=(), key_label="", icon=None):
-        self.x, self.y, self.w, self.h = rect
-        self.text = text
-        self.value = value          # returned when chosen
-        self.keys = keys            # key codes that also choose it
-        self.key_label = key_label  # shortcut shown at the left; text is centred if empty
-        self.icon = icon            # draw this icon (see ICONS) instead of the text
-
-    def contains(self, pt):
-        return (pt is not None and self.x <= pt[0] < self.x + self.w
-                and self.y <= pt[1] < self.y + self.h)
-
-    def draw(self, img, state):
-        """Draw in `state`: "normal", "hover" or "pressed"."""
-        fill, border = self._STYLES[state]
-        x0, y0, x1, y1 = self.x, self.y, self.x + self.w - 1, self.y + self.h - 1
-        cv2.rectangle(img, (x0, y0), (x1, y1), fill, -1)
-        shift = 0
-        if state == "pressed":
-            for k, shade in enumerate(self._SHADOW):
-                cv2.line(img, (x0 + k, y0 + k), (x1, y0 + k), shade, 1)
-                cv2.line(img, (x0 + k, y0 + k), (x0 + k, y1), shade, 1)
-            shift = 2
-        cv2.rectangle(img, (x0, y0), (x1, y1), border, 1)
-
-        if self.icon:
-            _draw_icon(img, self.icon, (x0 + self.w // 2 + shift, y0 + self.h // 2 + shift))
-            return
-        base_y = y0 + self.h // 2 + 7 + shift
-        if self.key_label:
-            cv2.putText(img, self.key_label, (x0 + 16 + shift, base_y), FONT, 0.6, YELLOW, 2, cv2.LINE_AA)
-            text_x = x0 + 80
-        else:
-            (tw, _), _ = cv2.getTextSize(self.text, FONT, 0.6, 1)
-            text_x = x0 + (self.w - tw) // 2
-        cv2.putText(img, self.text, (text_x + shift, base_y), FONT, 0.6, WHITE, 1, cv2.LINE_AA)
-
-
-def button_row(specs, y):
-    """
-    Buttons for `specs`, side by side and centred at height y. A spec is
-    (text, value, keys), or (text, value, keys, icon) for an icon button (see
-    ICONS), which is drawn as that icon at a fixed width.
-    """
-    buttons = []
-    for spec in specs:
-        text, value, keys = spec[:3]
-        icon = spec[3] if len(spec) > 3 else None
-        w = _ICON_BTN_W if icon else max(_BTN_MIN_W, cv2.getTextSize(text, FONT, 0.6, 1)[0][0] + 48)
-        buttons.append(Button((0, y, w, BTN_H), text, value, keys, icon=icon))
-    x = (MAIN_W - sum(b.w for b in buttons) - _BTN_GAP * (len(buttons) - 1)) // 2
-    for b in buttons:
-        b.x = x
-        x += b.w + _BTN_GAP
-    return buttons
-
-
-# Icon buttons: media-player symbols drawn with shapes (the font has none).
-ICONS = ("play", "pause", "prev_frame", "next_frame", "prev_video", "next_video")
-_ICON_BTN_W = 72
-
-
-def _draw_icon(img, icon, center, size=11, color=WHITE):
-    """Draw one of ICONS centred at `center`, about 2*size pixels tall."""
-    cx, cy = center
-    s = size
-
-    def triangle(tip_x, facing):
-        # A filled triangle whose tip is at tip_x, pointing right (+1) or left (-1).
-        base_x = tip_x - facing * int(1.6 * s)
-        pts = np.array([(tip_x, cy), (base_x, cy - s), (base_x, cy + s)], np.int32)
-        cv2.fillPoly(img, [pts], color, cv2.LINE_AA)
-
-    def bar(x):
-        cv2.rectangle(img, (x - 2, cy - s), (x + 1, cy + s), color, -1)
-
-    if icon == "play":
-        triangle(cx + int(0.8 * s), +1)
-    elif icon == "pause":
-        cv2.rectangle(img, (cx - s + 2, cy - s), (cx - 3, cy + s), color, -1)
-        cv2.rectangle(img, (cx + 3, cy - s), (cx + s - 2, cy + s), color, -1)
-    elif icon == "next_frame":                      # ▶|
-        triangle(cx + 4, +1)
-        bar(cx + 8)
-    elif icon == "prev_frame":                      # |◀
-        triangle(cx - 4, -1)
-        bar(cx - 8)
-    elif icon == "next_video":                      # ▶▶|
-        triangle(cx - 2, +1)
-        triangle(cx + 14, +1)
-        bar(cx + 18)
-    elif icon == "prev_video":                      # |◀◀
-        triangle(cx + 2, -1)
-        triangle(cx - 14, -1)
-        bar(cx - 18)
-
-
-def _bar_buttons(specs):
-    """Button row in the bottom bar of an image screen."""
-    return button_row(specs, MAIN_H - BAR_H + (BAR_H - BTN_H) // 2)
 
 
 class WindowClosed(Exception):
@@ -500,10 +258,10 @@ class LabelerUI:
         if outcome and i != self.active:
             name_color, note_color = _dim(name_color), _dim(note_color)
         text_w = SIDEBAR_W - 2 * x0 - (_MARK_W if outcome else 0)
-        cv2.putText(panel, _truncate(f"{i + 1}. {self.names[i]}", text_w, 0.5),
+        cv2.putText(panel, truncate(f"{i + 1}. {self.names[i]}", text_w, 0.5),
                     (x0, y + 14), FONT, 0.5, name_color, 1, cv2.LINE_AA)
         if self.notes[i]:
-            cv2.putText(panel, _truncate(self.notes[i], text_w - 12, 0.4),
+            cv2.putText(panel, truncate(self.notes[i], text_w - 12, 0.4),
                         (x0 + 12, y + 31), FONT, 0.4, note_color, 1, cv2.LINE_AA)
         if outcome:
             _draw_mark(panel, outcome, (SIDEBAR_W - x0 - 10, y + 12))
@@ -602,10 +360,10 @@ class LabelerUI:
         events = self._window.mouse_events
         while events:
             kind, pt = events.popleft()
-            if seek_bar and (self._seeking or (kind == "down" and _on_seek_bar(pt))):
+            if seek_bar and (self._seeking or (kind == "down" and on_seek_bar(pt))):
                 self._seeking = kind == "down"
                 if kind == "up":
-                    chosen = ("seek_end", _seek_fraction(pt[0]))
+                    chosen = ("seek_end", seek_fraction(pt[0]))
                 continue
             row = self._sidebar_row_at(pt)
             if row is not None and row in self.review_targets:
@@ -670,17 +428,17 @@ class LabelerUI:
             return value == "cancel"
         self._last_progress_draw = now
 
-        main = _dimmed(preview() if callable(preview) else preview, _DIM_PROGRESS)
+        main = dimmed(preview() if callable(preview) else preview, _DIM_PROGRESS)
         cy = MAIN_H // 2
-        _put_centered(main, title, cy - 40, 0.9, WHITE, 2)
-        _put_centered(main, subtitle, cy - 5, 0.6, GREY, 1)
+        put_centered(main, title, cy - 40, 0.9, WHITE, 2)
+        put_centered(main, subtitle, cy - 5, 0.6, GREY, 1)
         bar_w, bar_h = 560, 22
         bx, by = (MAIN_W - bar_w) // 2, cy + 20
         fraction = min(max(fraction, 0.0), 1.0)
         cv2.rectangle(main, (bx, by), (bx + bar_w, by + bar_h), (70, 70, 70), -1)
         cv2.rectangle(main, (bx, by), (bx + int(bar_w * fraction), by + bar_h), WHITE, -1)
         cv2.rectangle(main, (bx, by), (bx + bar_w, by + bar_h), GREY, 1)
-        _put_centered(main, f"{fraction * 100:.0f}%", by + bar_h + 28, 0.55, WHITE, 1)
+        put_centered(main, f"{fraction * 100:.0f}%", by + bar_h + 28, 0.55, WHITE, 1)
         value, _, _ = self._interact(main, buttons, 1)
         return value == "cancel"
 
@@ -688,10 +446,10 @@ class LabelerUI:
         """A centred status message with no buttons (e.g. while a model loads); returns at once."""
         main = np.zeros((MAIN_H, MAIN_W, 3), dtype=np.uint8)
         y = MAIN_H // 2 - 15 * len(lines) - 20
-        _put_centered(main, title, y, 0.9, WHITE, 2)
+        put_centered(main, title, y, 0.9, WHITE, 2)
         for text in lines:
             y += 34
-            _put_centered(main, text, y, 0.55, GREY, 1)
+            put_centered(main, text, y, 0.55, GREY, 1)
         self._show(main, 1)
 
     def show_frame(self, img, wait_ms, specs, label=None, hotkeys=None, seek=None):
@@ -712,17 +470,17 @@ class LabelerUI:
             While the seek bar is dragged, value is ("seek", fraction); when
             it's released, ("seek_end", fraction).
         """
-        main, _, _, _ = _frame_screen(img, bottom=BAR_H + (SEEK_H if seek else 0))
+        main, _, _, _ = frame_screen(img, bottom=BAR_H + (SEEK_H if seek else 0))
         if label:
             cv2.putText(main, label, (16, MAIN_H - BAR_H // 2 + 6), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
         if seek:
-            fraction = _seek_fraction(self._window.mouse_pos[0]) if self._seeking else seek[0]
-            active = self._seeking or _on_seek_bar(self._window.mouse_pos)
-            _draw_seek_bar(main, fraction, seek[1], seek[2], active)
-        value, pressed_at, _ = self._interact(main, _bar_buttons(specs), wait_ms, hotkeys,
+            fraction = seek_fraction(self._window.mouse_pos[0]) if self._seeking else seek[0]
+            active = self._seeking or on_seek_bar(self._window.mouse_pos)
+            draw_seek_bar(main, fraction, seek[1], seek[2], active)
+        value, pressed_at, _ = self._interact(main, bar_buttons(specs), wait_ms, hotkeys,
                                               seek_bar=bool(seek))
         if value is None and self._seeking:
-            value = ("seek", _seek_fraction(self._window.mouse_pos[0]))
+            value = ("seek", seek_fraction(self._window.mouse_pos[0]))
         return value, pressed_at
 
     def start_playback(self):
@@ -735,10 +493,10 @@ class LabelerUI:
         buttons below it. `lines` is a list of (text, colour); the first is the
         title. Returns the chosen button's value.
         """
-        main = _dimmed(background, _DIM_MESSAGE)
+        main = dimmed(background, _DIM_MESSAGE)
         y = MAIN_H // 2 - 18 * len(lines) - 30
         for k, (text, color) in enumerate(lines):
-            _put_centered(main, text, y, 0.8 if k == 0 else 0.55, color, 2 if k == 0 else 1)
+            put_centered(main, text, y, 0.8 if k == 0 else 0.55, color, 2 if k == 0 else 1)
             y += 45 if k == 0 else 30
         return self._wait_for_choice(main, button_row(specs, y + 20))
 
@@ -751,12 +509,12 @@ class LabelerUI:
         options = list(REVIEW_OPTIONS)
         if wrong_person:
             options.insert(-2, WRONG_PERSON_OPTION)   # before Replay and Quit
-        main = _dimmed(background, _DIM_PROMPT)
+        main = dimmed(background, _DIM_PROMPT)
         y = 100 if wrong_person else 110
-        _put_centered(main, "Was the detection successful?", y, 0.9, WHITE, 2)
+        put_centered(main, "Was the detection successful?", y, 0.9, WHITE, 2)
         y += 40
         for text in summary_lines:
-            _put_centered(main, text, y, 0.55, GREY, 1)
+            put_centered(main, text, y, 0.55, GREY, 1)
             y += 26
         y += 16
 
@@ -767,7 +525,7 @@ class LabelerUI:
                                   keys, key_label=f"[{key_label}]"))
             y += BTN_H + gap
         if note:
-            _put_centered(main, note, y + 18, 0.55, ORANGE, 1)
+            put_centered(main, note, y + 18, 0.55, ORANGE, 1)
         return self._wait_for_choice(main, buttons)
 
     def pick_endpoints(self, frame, reason=None, start=None, finish=None):
@@ -789,7 +547,7 @@ class LabelerUI:
             (start, finish, start_moved) in frame pixels — start_moved is True
             if the user placed the start point themselves — or None if cancelled.
         """
-        base, scale, ox, oy = _frame_screen(frame, top=HEADER_H)
+        base, scale, ox, oy = frame_screen(frame, top=HEADER_H)
         fh, fw = frame.shape[:2]
 
         def to_screen(p):
@@ -827,7 +585,7 @@ class LabelerUI:
             else:
                 specs = [move, ("Redo finish point", "redo", KEY_BACKSPACE),
                          ("Confirm", "confirm", KEY_ENTER), cancel]
-            value, _, clicks = self._interact(main, _bar_buttons(specs), 30)
+            value, _, clicks = self._interact(main, bar_buttons(specs), 30)
 
             if value == "cancel":
                 return None
@@ -868,10 +626,10 @@ class LabelerUI:
             boxes.append((min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad))
             cv2.putText(img, str(k + 1), (int(min(xs)), int(min(ys) - pad)), FONT, 1.0, color, 3, cv2.LINE_AA)
 
-        base, scale, ox, oy = _frame_screen(img, top=HEADER_H)
+        base, scale, ox, oy = frame_screen(img, top=HEADER_H)
         cv2.putText(base, reason, (16, 32), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
         cv2.putText(base, "Click the person doing the walk test", (16, 62), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
-        buttons = _bar_buttons([("Cancel", "cancel", (KEY_ESC,))])
+        buttons = bar_buttons([("Cancel", "cancel", (KEY_ESC,))])
         self._new_screen()
         while True:
             value, _, clicks = self._interact(base, buttons, 30)
