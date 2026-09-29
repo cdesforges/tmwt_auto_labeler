@@ -309,7 +309,15 @@ look back over the whole walk.
 The end is the moment the subject crosses the finish line (near endpoint). Line
 crossings — the finish line, and the start line when one is clicked — count
 the first toe to cross (big or small, either foot) by default, or the midpoint of the two ankles with
-`--endpoint_behavior ankle_midpoint`. When the far endpoint is the subject's standing
+`--endpoint_behavior ankle_midpoint`. The start and finish lines are
+**horizontal** in the image through their endpoints: on the floor they're at
+right angles to the course, which is horizontal when filming from the end of
+the course with the camera held level (like the tape at the finish). A body
+point's position along the course (`t_along`, 0 at the start line, 1 at the
+finish line) is read off where the horizontal line through it meets the rope,
+so a foot to one side of a tilted rope crosses at the right moment. Positions
+are smoothed before finding crossings, forwards and backwards, so the smoothing
+doesn't delay them. When the far endpoint is the subject's standing
 position, the start is found by working backwards from that end:
 
 1. **Confirm the walk.** Find the sustained forward advance of the ankles that
@@ -340,7 +348,7 @@ are written to `--output_dir`. Videos rejected at review get no outputs.
 
 | File                        | Contents                                                                                              |
 |-----------------------------|-------------------------------------------------------------------------------------------------------|
-| `<basename>.csv`            | Frame-by-frame body position, rope endpoints, normalized rope position (`t_along`), 33 pose landmarks.|
+| `<basename>.csv`            | Frame-by-frame body position, rope endpoints, position along the course (`t_along`: 0 at the start line, 1 at the finish line), 35 pose landmarks.|
 | `<basename>_timing.json`    | The walk timing the labeler decided (start, end, duration, speed), how the start was found, and the review outcome. `view.py` reads it. |
 | `<basename>_annotated.mp4`  | Source frames with skeleton, rope, and info panel overlaid.                                           |
 | `<basename>_skeleton.mp4`   | Black canvas with skeleton, rope, and info panel only — de-identified for sharing.                    |

@@ -22,7 +22,7 @@ from tmwt.pose import pose_common
 from tmwt.detection import tracking
 from tmwt.core.job import COURSE_M, END_ANKLE_MIDPOINT
 
-# EMA weight on the newest t_along sample.
+# EMA weight on the newest t_along sample (smooth_t_along runs the EMA both ways).
 SMOOTH_ALPHA = 0.7
 # t_along of the start line (far endpoint) and finish line (near endpoint).
 FAR_T = 0.0
@@ -30,7 +30,18 @@ NEAR_T = 1.0
 
 
 def smooth_t_along(values):
-    """EMA-smooth a t_along series. None entries stay None and are skipped."""
+    """
+    Smooth a t_along series without delaying it: an EMA run forwards, then
+    backwards over the result. A forwards-only EMA lags the true position
+    (about 10-30 ms at walking speed), which made line crossings late; the
+    whole series is known after analysis, so the backward pass can cancel
+    that. None entries stay None and are skipped.
+    """
+    return _ema(_ema(values)[::-1])[::-1]
+
+
+def _ema(values):
+    """One forwards EMA pass (SMOOTH_ALPHA); None entries stay None and are skipped."""
     smoothed = []
     prev = None
     for t in values:
@@ -206,7 +217,7 @@ def _distance_function(job, track):
           f"using image-space distances for start detection.")
 
     def image_space(p):
-        t = metric.t_along(p, job.far_ep, job.near_ep)
+        t = metric.rope_fraction(p, job.far_ep, job.near_ep)
         return None if t is None else t * COURSE_M
     return image_space, "image-space"
 

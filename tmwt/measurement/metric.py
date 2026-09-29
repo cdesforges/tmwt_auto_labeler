@@ -107,10 +107,38 @@ def estimate_vanishing_point(foot_points, head_points):
 
 def t_along(point, far_ep, near_ep):
     """
-    Image-space position of `point` along the far_ep -> near_ep line: its
-    orthogonal projection as a fraction of the line (0 at far_ep, 1 at near_ep,
-    negative behind far_ep). Linear in pixels, so NOT a true distance — see
-    metric_along for that.
+    Image-space position of `point` along the course, for line crossings: 0 on
+    the start line, 1 on the finish line, negative behind the start. Linear in
+    pixels, so NOT a true distance — see metric_along for that.
+
+    The start and finish lines are the lines across the course through far_ep
+    and near_ep. On the floor they're at right angles to the course; filmed
+    from the end of the course with the camera held level, that's horizontal
+    in the image (like the tape at the finish). So a point's position is where
+    the horizontal line through it meets the rope: (y - far_y) / (near_y -
+    far_y). Measuring at right angles to the rope in the image instead is
+    wrong when the rope is tilted in the frame: the lines tilt with it, and
+    feet to one side of the rope cross them early or late.
+
+    A rope that runs more sideways than up-down in the image (not a view down
+    the course) falls back to rope_fraction.
+
+    Returns None if the endpoints coincide.
+    """
+    ax, ay = far_ep
+    bx, by = near_ep
+    dy = float(by - ay)
+    if abs(dy) >= abs(bx - ax) and abs(dy) > 1e-6:
+        return (point[1] - ay) / dy
+    return rope_fraction(point, far_ep, near_ep)
+
+
+def rope_fraction(point, far_ep, near_ep):
+    """
+    `point`'s orthogonal projection onto the far_ep -> near_ep line in the
+    image, as a fraction of it (0 at far_ep, 1 at near_ep). Used to measure
+    distances for walk-start detection (metric_along), where it removes the
+    ankles' sideways movement. For start / finish line crossings use t_along.
 
     Returns None if the endpoints coincide.
     """
@@ -135,13 +163,13 @@ def metric_along(point, far_ep, near_ep, V, course_m):
         d(P') = L * u * |B-V| / |P'-V|,   P' = A + u (B - A)
 
     with A = far_ep (0 m), B = near_ep (course_m), V = vanishing point and u the
-    image-space fraction along A->B (t_along). Points behind far_ep come out
+    image-space fraction along A->B (rope_fraction). Points behind far_ep come out
     negative.
 
     Returns:
         Distance in metres, or None if the point is degenerate (at V).
     """
-    u = t_along(point, far_ep, near_ep)
+    u = rope_fraction(point, far_ep, near_ep)
     if u is None:
         return None
     A = np.asarray(far_ep, dtype=np.float64)
