@@ -135,8 +135,9 @@ class TransportTest(unittest.TestCase):
     def test_label_and_icon_follow_the_pause_state(self):
         p = Player(TIMES)
         back, toggle, forward = p.transport()
-        self.assertEqual(back[1:], ("back", (), "prev_frame"))
-        self.assertEqual(forward[1:], ("forward", (), "next_frame"))
+        # The arrow keys are the frame-step buttons' own keys (so their tooltips name them).
+        self.assertEqual(back[1:], ("back", (KEY_LEFT,), "prev_frame"))
+        self.assertEqual(forward[1:], ("forward", (KEY_RIGHT,), "next_frame"))
         self.assertEqual((toggle[0], toggle[3]), ("Pause", "pause"))
         p.paused = True
         toggle = p.transport()[1]
@@ -284,14 +285,14 @@ class ShowTest(unittest.TestCase):
         self.assertIs(call["img"], img)
         self.assertEqual(call["specs"], specs)
         self.assertEqual((call["label"], call["alert"], call["notice"]), ("Review", "oops", "note"))
-        self.assertEqual(call["hotkeys"], {KEY_LEFT: "back", KEY_RIGHT: "forward", ord("m"): "menu"})
+        self.assertEqual(call["hotkeys"], {ord("m"): "menu"})
         self.assertIsInstance(call["seek"], SeekState)
         self.assertEqual(call["seek"], seek_state(TIMES, 10, [(1.0, GREEN, "start")], {YELLOW: [3]}))
 
-    def test_hotkeys_can_override_the_arrows(self):
+    def test_no_hotkeys_given_means_none(self):
         ui = FakeUI()
-        Player(TIMES).show(ui, None, [], hotkeys={KEY_LEFT: "prev_flag"})
-        self.assertEqual(ui.calls[0]["hotkeys"][KEY_LEFT], "prev_flag")
+        Player(TIMES).show(ui, None, [])
+        self.assertEqual(ui.calls[0]["hotkeys"], {})
 
     def test_caller_values_are_returned(self):
         p = Player(TIMES)

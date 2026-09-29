@@ -18,9 +18,9 @@ from tmwt.ui.player import Player
 from tmwt.ui.widgets import CONFIRM, GREEN, GREY, KEY_ENTER, ORANGE, RED
 
 # Flagged-points mode: jump between flagged frames ([ and ]).
-_PREV_FLAG = ("Previous flagged frame ([)", "prev_flag", (ord("["),), "prev_flag")
+_PREV_FLAG = ("Previous flagged frame", "prev_flag", (ord("["),), "prev_flag")
 
-_NEXT_FLAG = ("Next flagged frame (])", "next_flag", (ord("]"),), "next_flag")
+_NEXT_FLAG = ("Next flagged frame", "next_flag", (ord("]"),), "next_flag")
 
 
 def alert_pose_flags(job, ui):

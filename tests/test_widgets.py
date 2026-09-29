@@ -376,16 +376,36 @@ class RowFittingTest(unittest.TestCase):
 
 
 class TooltipSpecTest(unittest.TestCase):
-    """ButtonSpec tooltips: shown on hover (base_window draws them)."""
+    """Tooltips: "description (shortcut)" by default; shown on hover (base_window draws them)."""
 
-    def test_text_button_tooltip_from_the_spec(self):
+    def test_confirm_shows_its_shortcut(self):
         (b,) = button_row([widgets.CONFIRM], 100)
-        self.assertEqual((b.text, b.tooltip), ("Confirm", "Shortcut: Enter"))
+        self.assertEqual((b.text, b.tooltip), ("Confirm", "Confirm (Enter)"))
 
-    def test_plain_tuples_still_work(self):
+    def test_icon_button_with_a_shortcut(self):
+        (b,) = button_row([("Back one frame", "back", (widgets.KEY_LEFT,), "prev_frame")], 100)
+        self.assertEqual(b.tooltip, "Back one frame (Left arrow)")
+
+    def test_without_a_shortcut(self):
         text, icon = button_row([("OK", "ok", ()), ("Play", "play", (), "play")], 100)
-        self.assertIsNone(text.tooltip)
-        self.assertEqual(icon.tooltip, "Play")          # an icon button's label is its tooltip
+        self.assertIsNone(text.tooltip)                  # the label says it all
+        self.assertEqual(icon.tooltip, "Play")           # an icon needs its description
+
+    def test_explicit_tooltip_wins(self):
+        (b,) = button_row([widgets.ButtonSpec("OK", "ok", (13,), None, "Custom")], 100)
+        self.assertEqual(b.tooltip, "Custom")
+
+    def test_key_names(self):
+        self.assertEqual([widgets.key_name(k) for k in (13, 10, 27, 32, 8, 127, widgets.KEY_LEFT,
+                                                        widgets.KEY_RIGHT, ord("m"), ord("["), ord("5"))],
+                         ["Enter", "Enter", "Esc", "Space", "Backspace", "Backspace", "Left arrow",
+                          "Right arrow", "M", "[", "5"])
+        self.assertEqual(widgets.key_name(5000), "key 5000")
+
+    def test_shortcut_text_merges_codes_for_one_key(self):
+        self.assertEqual(widgets.shortcut_text((ord("m"), ord("M"))), "M")
+        self.assertEqual(widgets.shortcut_text(widgets.KEY_ENTER + (widgets.KEY_ESC,)), "Enter / Esc")
+        self.assertEqual(widgets.shortcut_text(()), "")
 
     def test_icon_button_with_its_own_tooltip(self):
         (b,) = button_row([widgets.ButtonSpec("Play", "play", (), "play", "Play (Space)")], 100)

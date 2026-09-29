@@ -6,7 +6,7 @@ import numpy as np
 
 from tmwt.core.job import FrameResult, VideoJob
 from tmwt.core.video_io import VideoInfo
-from tmwt.detection import people, pose_check, pose_smoothing
+from tmwt.detection import people, pose_smoothing
 from tmwt.pose import pose_common as pc
 
 W, H = 800, 800

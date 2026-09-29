@@ -252,7 +252,8 @@ class DetectWalkTimesTest(unittest.TestCase):
         job = camera_job(still_s=0.0)
         quiet(timing.update_timing, job)
         self.assertIsNone(job.walk_start)
-        self.assertIsNone(job.walk_end)                  # the end needs a start
+        self.assertIsNotNone(job.walk_end)               # still found, so only the start is missing
+        self.assertIsNone(job.duration)
         self.assertEqual(job.timing_note, timing.NOTE_NO_START.format(reason=onset.START_TOO_SOON))
 
     def test_no_track_means_no_start(self):

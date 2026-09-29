@@ -123,10 +123,10 @@ class Player:
 
     def transport(self):
         """Button specs for frame back, play / pause and frame forward."""
-        return [("Back one frame", "back", (), "prev_frame"),
+        return [("Back one frame", "back", (KEY_LEFT,), "prev_frame"),
                 ("Play" if self.paused else "Pause", "toggle", (KEY_SPACE,),
                  "play" if self.paused else "pause"),
-                ("Forward one frame", "forward", (), "next_frame")]
+                ("Forward one frame", "forward", (KEY_RIGHT,), "next_frame")]
 
     def show(self, ui, image, specs, label=None, marks=(), hotkeys=None, alert=None, notice=None):
         """
@@ -151,7 +151,7 @@ class Player:
         else:
             wait_ms = _PAUSED_MS if self.paused else self._clock.ms_until(self.times[self.k])
         self._shown.append((time.perf_counter(), self.times[self.k]))
-        keys = {KEY_LEFT: "back", KEY_RIGHT: "forward", **(hotkeys or {})}
+        keys = hotkeys or {}   # the arrow keys are on the frame-step buttons
         dialogs = ui.dialogs_shown
         value, pressed_at = ui.show_frame(image, wait_ms, specs, label, hotkeys=keys,
                                           seek=seek_state(self.times, self.k, marks, self.highlights), alert=alert,

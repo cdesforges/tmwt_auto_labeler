@@ -91,6 +91,14 @@ NOTE_SHORT_STANDSTILL = ("Start found from very little standing still before the
 NOTE_NO_START = "Start not found: {reason}. Mark it by hand."
 
 
+def no_start_reason(note):
+    """Why the start wasn't found, from a NOTE_NO_START timing note (else None)."""
+    prefix, suffix = NOTE_NO_START.split("{reason}")
+    if note and note.startswith(prefix) and note.endswith(suffix):
+        return note[len(prefix):-len(suffix)]
+    return None
+
+
 def update_timing(job):
     """Recompute the automatic walk timing from the job's current endpoints."""
     apply_endpoints(job)
@@ -136,7 +144,9 @@ def detect_walk_times(job):
             if start is not None and detail == "start-line crossing":
                 note = ""   # the start line decided it, not the movement
 
-    end = lines.crossing(NEAR_T, after=start) if start is not None else None
+    # Without a start the end is still looked for, so the reviewer is told
+    # exactly what's missing (and only has to mark that).
+    end = lines.crossing(NEAR_T, after=start) if start is not None else first_end
     rule = job.endpoint_behavior.replace("_", " ")
     if start is not None:
         print(f"  Walk STARTED at {start:.3f}s ({detail}{', ' + rule if 'line' in detail else ''})")

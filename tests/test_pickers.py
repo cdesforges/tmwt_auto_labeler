@@ -53,7 +53,8 @@ class EndpointPickingTest(unittest.TestCase):
         confirm = [s for s in st.specs() if s[1] == "confirm"][0]
         self.assertEqual(confirm.text, "Confirm")                  # the shortcut is shown on hover
         self.assertEqual(confirm.keys, KEY_ENTER)
-        self.assertIn("Enter", confirm.tooltip)
+        (button,) = bar_buttons([confirm])
+        self.assertEqual(button.tooltip, "Confirm (Enter)")
         self.assertEqual(values(st), ["confirm", "cancel"])        # no move buttons: points are dragged
 
     def test_no_confirm_until_both_are_placed(self):

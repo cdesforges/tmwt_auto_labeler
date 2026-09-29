@@ -160,12 +160,80 @@ class HelpersTest(Base):
         self.assertEqual(review._final_confirm(make_job(), ui, None), "next")
         self.assertEqual([v for _, v, _ in ui.specs[0]], ["next", "back"])
 
-    def test_final_confirm_incomplete_offers_go_back_or_skip(self):
+    def test_final_confirm_incomplete_says_what_is_missing(self):
         job = make_job()
         job.walk_end = None
-        ui = FakeUI({"Timing incomplete": "skip"})
+        ui = FakeUI({"Walk end not found": "skip"})
         self.assertEqual(review._final_confirm(job, ui, None), "skip")
-        self.assertEqual([v for _, v, _ in ui.specs[0]], ["back", "skip"])
+        # Time manually (back to the playback), Reselect points, Skip this file
+        self.assertEqual([v for _, v, _ in ui.specs[0]], ["back", "reselect", "skip"])
+        self.assertEqual(ui.specs[0][0][0], "Time manually")
+
+    # --- what's missing -------------------------------------------------------------
+
+    def test_missing_times(self):
+        job = make_job()
+        self.assertEqual(review.missing_times(job), [])
+        job.walk_start = None
+        self.assertEqual(review.missing_times(job), ["start"])
+        job.walk_end = None
+        self.assertEqual(review.missing_times(job), ["start", "end"])
+        job.walk_start = 1.0
+        self.assertEqual(review.missing_times(job), ["end"])
+
+    def test_incomplete_notice_names_the_dots(self):
+        job = make_job()
+        self.assertIsNone(review.incomplete_notice(job))
+        job.walk_end = None
+        self.assertIn("Walk end not found", review.incomplete_notice(job))
+        self.assertIn("red dot", review.incomplete_notice(job))
+        self.assertNotIn("green dot", review.incomplete_notice(job))
+        job.walk_start = None
+        note = review.incomplete_notice(job)
+        self.assertIn("Walk start and end not found", note)
+        self.assertIn("green and red dots", note)
+
+    def test_incomplete_notice_fits_the_playback(self):
+        import cv2
+        from tmwt.ui.widgets import FONT, MAIN_W
+        job = make_job()
+        for start, end in ((None, 6.0), (1.0, None), (None, None)):
+            job.walk_start, job.walk_end = start, end
+            width = cv2.getTextSize(review.incomplete_notice(job), FONT, 0.5, 1)[0][0] + 16
+            self.assertLess(width, MAIN_W)
+
+    def titles_and_text(self, job):
+        lines = review.missing_timing_lines(job)
+        return lines[0][0], " ".join(t for t, _ in lines[1:])
+
+    def test_missing_start_at_the_standing_spot_gives_the_reason(self):
+        job = make_job()
+        job.walk_start, job.far_ep_is_standing_spot = None, True
+        job.timing_note = timing.NOTE_NO_START.format(reason="the walk starts too soon after the recording begins")
+        title, text = self.titles_and_text(job)
+        self.assertEqual(title, "Walk start not found")
+        self.assertIn("the walk starts too soon", text)
+        self.assertIn("drag the", text)                            # the already-walking hint
+        self.assertNotIn("finish line", text)
+
+    def test_missing_start_with_a_start_line(self):
+        job = make_job()
+        job.walk_start, job.far_ep_is_standing_spot = None, False
+        title, text = self.titles_and_text(job)
+        self.assertIn("crossing the start line", text)
+
+    def test_missing_end_explains_the_finish_line(self):
+        job = make_job()
+        job.walk_end = None
+        title, text = self.titles_and_text(job)
+        self.assertEqual(title, "Walk end not found")
+        self.assertIn("finish line", text)
+        self.assertNotIn("Start:", text)
+
+    def test_missing_both(self):
+        job = make_job()
+        job.walk_start = job.walk_end = None
+        self.assertEqual(self.titles_and_text(job)[0], "Walk start and end not found")
 
 
 # --- review_job ----------------------------------------------------------------------
@@ -230,7 +298,7 @@ class ReviewJobTest(Base):
         job = make_job()
         job.walk_end = None
         self.plays(result("confirm", end=None))
-        ui = FakeUI({"Timing incomplete": "skip"})
+        ui = FakeUI({"Walk end not found": "skip"})
         review.review_job(job, ui, 0)
         self.assertEqual((job.review, job.review_note), (REVIEW_REJECTED, "skipped at review"))
         self.assertEqual(ui.reviewed[0], REJECTED_MARK)
@@ -295,6 +363,45 @@ class ReviewJobTest(Base):
         self.assertEqual((job.far_ep, job.near_ep, job.endpoint_source), ((1, 1), (2, 2), "manual"))
         self.assertEqual((job.walk_start, job.walk_end, job.timing_source), (0.5, 4.5, "auto"))
 
+    def test_reselect_points_from_the_final_confirm(self):
+        job = make_job()
+        job.walk_end = None
+        self.plays(result("confirm", end=None, k=7), result("confirm", start=0.5, end=4.5))
+
+        def update(j):
+            j.walk_start, j.walk_end, j.timing_source = 0.5, 4.5, "auto"
+
+        self.patch(timing, "update_timing", side_effect=update)
+        ui = FakeUI({"Walk end not found": "reselect", "Confirm this video?": "next"},
+                    endpoints=[((1, 1), (2, 2), True)])
+        review.review_job(job, ui, 0)
+        self.assertEqual(job.near_ep, (2, 2))
+        self.assertEqual(self.start_ks(), [None, None])            # replays from the start
+        self.assertEqual(job.review, REVIEW_APPROVED)
+
+    def test_incomplete_timing_shows_what_to_mark_in_the_playback(self):
+        job = make_job()
+        job.walk_start = None
+        self.plays(result("menu"))
+        ui = FakeUI(menu=["quit"])
+        review.review_job(job, ui, 0)
+        notice = self.play.call_args_list[0].kwargs["notice"]
+        self.assertIn("Walk start not found", notice)
+
+    def test_timing_still_incomplete_after_picking_offers_time_manually(self):
+        job = make_job()
+        job.far_ep = job.near_ep = None
+        self.plays(result("menu"))
+
+        def update(j):
+            j.walk_start, j.walk_end = 1.0, None
+
+        self.patch(timing, "update_timing", side_effect=update)
+        ui = FakeUI({"Walk end not found": "manual"}, menu=["quit"], endpoints=[((1, 1), (2, 2), True)])
+        review.review_job(job, ui, 0)
+        self.assertEqual([v for _, v, _ in ui.specs[0]], ["reselect", "manual", "skip"])
+        self.assertIn("red dot", self.play.call_args_list[0].kwargs["notice"])
+
     def test_confirm_with_unconfirmed_flags_goes_to_flagged_points_first(self):
         job = make_job()
         flag(job, 5)
@@ -348,7 +455,7 @@ class PlaybackHelpersTest(Base):
     def test_m_key_only_on_the_mark_it_sets_next(self):
         start = review_playback._mark_button("start", "start")
         stop = review_playback._mark_button("stop", "start")
-        self.assertEqual(start, ("Mark walk start (M)", "mark_start", review_playback._MARK_KEYS, "mark_start"))
+        self.assertEqual(start, ("Mark walk start", "mark_start", review_playback._MARK_KEYS, "mark_start"))
         self.assertEqual(stop, ("Mark walk stop", "mark_stop", (), "mark_stop"))
         self.assertEqual(review_playback._mark_button("stop", "stop")[2], review_playback._MARK_KEYS)
         self.assertEqual(review_playback._mark_button("start", "stop")[2], ())

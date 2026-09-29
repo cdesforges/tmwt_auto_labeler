@@ -7,8 +7,10 @@ Everything is drawn with OpenCV into the fixed-size main-area canvas
 (MAIN_W x MAIN_H); window.py scales it to the real window. Buttons are described
 by specs (ButtonSpec, or a plain tuple in the same order): the label, the value
 returned when chosen, the key codes that also choose it, an optional icon (see
-ICONS) drawn instead of the label, and an optional tooltip shown on hover (an
-icon button's label is its tooltip).
+ICONS) drawn instead of the label, and an optional tooltip. Unless one is
+given, a button's tooltip (shown on hover) is its description with its
+keyboard shortcut, e.g. "Confirm (Enter)" or "Back one frame (Left arrow)";
+a text button without a shortcut has none (its label says it all).
 
 Buttons share one base class (Button: hit-testing and the normal / hover /
 pressed look) and differ only in what they draw on top: TextButton (centred
@@ -21,6 +23,8 @@ from collections import namedtuple
 
 import cv2
 import numpy as np
+
+from tmwt.ui.window import KEY_LEFT, KEY_RIGHT
 
 # Main area (left of the sidebar), in canvas pixels.
 MAIN_W, MAIN_H = 960, 720
@@ -158,8 +162,37 @@ def frame_screen(img, top=0, bottom=BAR_H):
 # of the label and a tooltip shown on hover. Plain tuples in this order work too.
 ButtonSpec = namedtuple("ButtonSpec", "text value keys icon tooltip", defaults=(None, None))
 
-# The Confirm button used across screens; its shortcut is shown on hover.
-CONFIRM = ButtonSpec("Confirm", "confirm", KEY_ENTER, tooltip="Shortcut: Enter")
+# The Confirm button used across screens.
+CONFIRM = ButtonSpec("Confirm", "confirm", KEY_ENTER)
+
+# Names of keys that aren't a printable character, for tooltips.
+_KEY_NAMES = {13: "Enter", 10: "Enter", KEY_ESC: "Esc", KEY_SPACE: "Space", 8: "Backspace",
+              127: "Backspace", 9: "Tab", KEY_LEFT: "Left arrow", KEY_RIGHT: "Right arrow"}
+
+
+def key_name(code):
+    """A key code as people call the key: "Enter", "Left arrow", "M" (letters in capitals), "["."""
+    if code in _KEY_NAMES:
+        return _KEY_NAMES[code]
+    return chr(code).upper() if 32 < code < 127 else f"key {code}"
+
+
+def shortcut_text(keys):
+    """The keys that choose a button, e.g. "Enter" or "Enter / Esc"; "" if none."""
+    names = []
+    for code in keys:
+        name = key_name(code)
+        if name not in names:
+            names.append(name)
+    return " / ".join(names)
+
+
+def default_tooltip(text, keys, icon):
+    """A button's tooltip when its spec gives none (see the module docs)."""
+    keys_text = shortcut_text(keys)
+    if keys_text:
+        return f"{text} ({keys_text})"
+    return text if icon else None
 
 class Button:
     """
@@ -311,6 +344,7 @@ def button_row(specs, y):
     buttons = []
     for spec in specs:
         text, value, keys, icon, tooltip = ButtonSpec(*spec)
+        tooltip = tooltip or default_tooltip(text, keys, icon)
         if icon:
             buttons.append(IconButton((0, y, _ICON_BTN_W, BTN_H), text, value, keys, icon=icon,
                                       tooltip=tooltip))

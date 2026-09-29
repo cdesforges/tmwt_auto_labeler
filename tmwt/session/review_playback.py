@@ -28,7 +28,7 @@ _MARKS = {"start": "mark_start", "stop": "mark_stop"}
 
 # The playback's own buttons, right of the transport controls.
 
-_MENU = ("Menu (Esc)", "menu", (KEY_ESC,), "menu")
+_MENU = ("Menu", "menu", (KEY_ESC,), "menu")
 
 # How the playback ended: "confirm" or "menu"; the marks then (start, stop);
 # the last annotated frame shown (or None); and the frame index it was on.
@@ -112,10 +112,11 @@ def playback(job, ui, start_k=None, notice=None):
 
 
 def _mark_button(which, m_next):
-    """The green (start) / red (stop) dot button; M works on the one it sets next."""
-    m = which == m_next
-    return (f"Mark walk {which}" + (" (M)" if m else ""), _MARKS[which],
-            _MARK_KEYS if m else (), _MARKS[which])
+    """
+    The green (start) / red (stop) dot button; M works on the one it sets next
+    (and its tooltip says so).
+    """
+    return (f"Mark walk {which}", _MARKS[which], _MARK_KEYS if which == m_next else (), _MARKS[which])
 
 
 def _mark_text(t):

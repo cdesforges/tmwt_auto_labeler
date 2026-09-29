@@ -10,14 +10,14 @@ from unittest import mock
 
 import numpy as np
 
-from tmwt.ui import base_window, sidebar as sb, top_bar, widgets
+from tmwt.ui import base_window, sidebar as sb, widgets
 from tmwt.ui.base_window import CANVAS_H, CANVAS_W, BaseWindow
 from tmwt.ui.events import JumpTo, QuitWithoutSaving, SaveAndQuit, WindowClosed
 from tmwt.ui.labeler_ui import LabelerUI
 from tmwt.ui.pickers import PickerScreens
 from tmwt.ui.seek_bar import MARK, SCRUB, Marker, SeekBar, SeekState
 from tmwt.ui.top_bar import TOPBAR_H
-from tmwt.ui.widgets import GREEN, KEY_ESC, MAIN_H, MAIN_W, RED, TextButton, button_row
+from tmwt.ui.widgets import GREEN, KEY_ESC, MAIN_H, MAIN_W, RED, button_row
 from tmwt.ui.window import KEY_NONE
 
 

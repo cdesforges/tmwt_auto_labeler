@@ -16,8 +16,8 @@ from tmwt.core.job import (REVIEW_APPROVED, REVIEW_REJECTED, REVIEW_UNREVIEWED, 
 from tmwt.core.video_io import VideoInfo
 from tmwt.session import review, review_progress, review_session
 from tmwt.ui.events import JumpTo, QuitWithoutSaving, SaveAndQuit, WindowClosed
-from tmwt.ui.sidebar import (APPROVED_MARK, DONE, FAILED, NEEDS_INPUT, REJECTED_MARK, SAVED_MARK,
-                             UNREVIEWED, WAITING, WORKING)
+from tmwt.ui.sidebar import (APPROVED_MARK, DONE, FAILED, NEEDS_INPUT, SAVED_MARK, UNREVIEWED,
+                             WAITING, WORKING)
 
 FPS = 25.0
 

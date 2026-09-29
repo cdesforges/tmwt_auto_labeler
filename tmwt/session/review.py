@@ -91,7 +91,7 @@ def review_job(job, ui, i):
 
     k = None            # where the playback resumes; None = from the start
     while True:
-        result = playback(job, ui, start_k=k, notice=note)
+        result = playback(job, ui, start_k=k, notice=note or incomplete_notice(job))
         k, note = result.k, None
         if (result.start, result.end) != (job.walk_start, job.walk_end):
             note = _apply_marks(job, result.start, result.end, "marked during review")
@@ -111,9 +111,11 @@ def review_job(job, ui, i):
             if decision == "skip":
                 _reject(job, ui, i, _skip_reason(job))
                 return None
-            continue   # "back": the playback, where it was
-
-        choice = _menu(job, ui, result.last, note)
+            if decision != "reselect":
+                continue   # "back": the playback, where it was
+            choice = "endpoints"   # the same as the menu's Change rope endpoints
+        else:
+            choice = _menu(job, ui, result.last, note)
         note = None
         if choice == "endpoints":
             outcome, note = _set_endpoints(job, ui)
@@ -158,21 +160,22 @@ def _final_confirm(job, ui, background):
     The final confirmation screen: what will be saved for this video.
 
     Returns:
-        "next" (approve it and go on), "back" (to the playback), or "skip"
-        (only offered when the timing is incomplete).
+        "next" (approve it and go on) or "back" (to the playback); when the
+        timing is incomplete (which it says, and why): "back" (time it
+        manually), "reselect" (the endpoints) or "skip".
     """
+    if job.duration is None:
+        return ui.show_message(
+            missing_timing_lines(job)
+            + [("Time it manually with the green and red dots, reselect the points, or skip it.", GREY)],
+            [("Time manually", "back", KEY_ENTER), ("Reselect points", "reselect", ()),
+             ("Skip this file", "skip", (KEY_ESC,))], background=background)
     lines = [(text, GREY) for text in summary_lines(job)]
     if job.pose_flags:
         smoothed = f", {len(job.pose_edits)} smoothed" if job.pose_edits else ""
         lines.append((f"Flagged pose points checked ({job.pose_flagged_frames} frame(s){smoothed}).", GREY))
     if job.timing_source == "auto" and job.timing_note:
         lines.append((job.timing_note, ORANGE))
-    if job.duration is None:
-        return ui.show_message(
-            [("Timing incomplete", ORANGE)] + lines
-            + [("Mark the walk start and stop (green and red dots), or skip this video.", GREY)],
-            [("Go back", "back", KEY_ENTER + (KEY_ESC,)), ("Skip this file", "skip", ())],
-            background=background)
     return ui.show_message([("Confirm this video?", WHITE)] + lines,
                            [("Next video", "next", KEY_ENTER), ("Go back", "back", (KEY_ESC,))],
                            background=background)
@@ -191,6 +194,45 @@ def _apply_marks(job, start, end, detail):
     job.timing_source, job.timing_detail = "manual", detail
     print(f"  Timing set by hand: {start:.3f}s to {end:.3f}s")
     return None
+
+
+def missing_times(job):
+    """Which walk times the job lacks: [], ["start"], ["end"] or ["start", "end"]."""
+    return [name for name, t in (("start", job.walk_start), ("end", job.walk_end)) if t is None]
+
+
+def incomplete_notice(job):
+    """
+    A one-line note for the playback when the timing is incomplete (None if
+    it isn't): what's missing and which dot marks it.
+    """
+    missing = missing_times(job)
+    if not missing:
+        return None
+    how = {("start",): "the start with the green dot", ("end",): "the end with the red dot",
+           ("start", "end"): "them with the green and red dots"}[tuple(missing)]
+    return f"Walk {' and '.join(missing)} not found: mark {how}, or reselect the points (menu)"
+
+
+def missing_timing_lines(job):
+    """
+    Lines saying which walk times weren't found and why, for a message screen:
+    an orange title (e.g. "Walk end not found"), then the reasons.
+    """
+    missing = missing_times(job)
+    lines = [(f"Walk {' and '.join(missing)} not found", ORANGE), (summary_lines(job)[1], GREY)]
+    if "start" in missing:
+        why = timing.no_start_reason(job.timing_note)
+        if job.far_ep_is_standing_spot:
+            lines.append((f"Start: the first step wasn't detected ({why or 'no walk found'}).", GREY))
+            lines.append(("If the subject is already walking when the video starts, drag the", GREY))
+            lines.append(("start point onto the start line instead.", GREY))
+        else:
+            lines.append(("Start: the subject wasn't seen crossing the start line.", GREY))
+    if "end" in missing:
+        lines.append(("End: no foot was seen crossing the finish line. Check the finish point is", GREY))
+        lines.append(("where the course ends, and that the feet reach it before leaving the picture.", GREY))
+    return lines
 
 
 def summary_lines(job):
@@ -212,8 +254,9 @@ def _set_endpoints(job, ui, reason=None):
     """
     Let the user (re)place the endpoints, with the start point pre-placed at the
     current start (or where the subject was detected standing), then recompute
-    the timing. If that timing is incomplete, ask straight away whether to
-    adjust the endpoints again, mark the timing in the playback, or skip the video.
+    the timing. If that timing is incomplete, say what's missing and ask
+    straight away whether to reselect the points, time the video manually (in
+    the playback), or skip it.
 
     Returns:
         (outcome, note): outcome is _REPLAY, _CANCELLED or _SKIP; note is a
@@ -237,21 +280,16 @@ def _set_endpoints(job, ui, reason=None):
         if job.duration is not None:
             return _REPLAY, None
 
-        hint = ([("If the subject was already walking when the video starts,", GREY),
-                 ("drag the start point onto the start line.", GREY)]
-                if job.far_ep_is_standing_spot else [])
-        choice = ui.show_message([
-            ("No walk start / end found", ORANGE),
-            (summary_lines(job)[1], GREY),
-            ("Adjust the endpoints, or mark the start and stop yourself in the playback.", GREY),
-        ] + hint, [("Adjust endpoints", "adjust", ()),
-            ("Mark it in the playback", "mark", KEY_ENTER),
-            ("Skip this file", "skip", (KEY_ESC,))], background=job.info.first_frame)
+        choice = ui.show_message(
+            missing_timing_lines(job)
+            + [("Reselect the points, or time it manually with the green and red dots.", GREY)],
+            [("Reselect points", "reselect", ()), ("Time manually", "manual", KEY_ENTER),
+             ("Skip this file", "skip", (KEY_ESC,))], background=job.info.first_frame)
         if choice == "skip":
             return _SKIP, None
-        if choice == "mark":
-            return _REPLAY, "Mark the walk start and stop with the green and red dots"
-        reason = None   # "adjust": back to the picker
+        if choice == "manual":
+            return _REPLAY, incomplete_notice(job)
+        reason = None   # "reselect": back to the picker
 
 
 def _pick_subject(job, ui):
