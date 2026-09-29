@@ -11,6 +11,10 @@ Each backend module exposes the same small inference API:
 
 and every landmarker has close(). Poses are lists of 33 landmarks in the layout
 described in pose_common.py, which also holds the drawing and ankle helpers.
+
+Creating landmarkers is cheap to repeat: rtmlib and mmpose load each model once
+per process and share it, and MediaPipe models load quickly (its VIDEO-mode
+landmarker tracks between frames, so a fresh one is needed per video anyway).
 """
 
 BACKENDS = ("mediapipe", "mmpose", "rtmlib")

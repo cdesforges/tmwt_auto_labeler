@@ -16,6 +16,13 @@ Notes:
       RTMLIB_DEVICE environment variable.
     - rtmlib has no streaming mode, so both landmarker factories are the same and
       detect_poses ignores its timestamp.
+    - Loading a model takes several seconds (CoreML compiles it), and the models
+      keep no state between frames, so each mode is loaded once per process and
+      shared by every landmarker (see _load_body).
+    - Frames with nobody in them return no poses. rtmlib's own Body() call
+      instead runs the pose model over the whole frame when the detector finds
+      no one, producing a phantom low-confidence skeleton; and on CoreML the
+      detector itself can fail on such frames (see _detect_people).
 """
 
 import os
@@ -25,8 +32,10 @@ from pose_common import coco17_to_landmarks
 
 try:
     from rtmlib import Body
+    from onnxruntime.capi.onnxruntime_pybind11_state import Fail as OrtFail
 except ImportError:
     Body = None
+    OrtFail = None
 
 # Default Body mode.
 DEFAULT_MODEL_PATH = "balanced"
@@ -43,20 +52,32 @@ def _default_device():
     return "cpu"
 
 
+# Loaded rtmlib.Body models, by (mode, device); see _load_body.
+_BODIES = {}
+
+
+def _load_body(mode):
+    """The rtmlib.Body for `mode`, loaded on first use and reused afterwards."""
+    if Body is None:
+        raise ImportError("rtmlib is not installed. Install with:\n"
+                          "    pip install rtmlib onnxruntime")
+    if mode not in _MODES:
+        raise ValueError(f"Invalid rtmlib mode: {mode!r}. Use one of {_MODES}.")
+    key = (mode, _default_device())
+    if key not in _BODIES:
+        _BODIES[key] = Body(mode=mode, backend="onnxruntime", device=key[1])
+    return _BODIES[key]
+
+
 class _Landmarker:
-    """rtmlib.Body plus the pose cap, with the close() the other backends have."""
+    """A shared rtmlib.Body plus a pose cap, with the close() the other backends have."""
 
     def __init__(self, mode, num_poses):
-        if Body is None:
-            raise ImportError("rtmlib is not installed. Install with:\n"
-                              "    pip install rtmlib onnxruntime")
-        if mode not in _MODES:
-            raise ValueError(f"Invalid rtmlib mode: {mode!r}. Use one of {_MODES}.")
-        self.body = Body(mode=mode, backend="onnxruntime", device=_default_device())
+        self.body = _load_body(mode)
         self.num_poses = num_poses
 
     def close(self):
-        """Nothing to release; onnxruntime tears down at garbage collection."""
+        """Nothing to release: the model stays loaded for the next landmarker."""
 
 
 def create_landmarker(model_path=DEFAULT_MODEL_PATH, num_poses=1):
@@ -67,9 +88,33 @@ def create_image_landmarker(model_path=DEFAULT_MODEL_PATH, num_poses=1):
     return _Landmarker(model_path, num_poses)
 
 
+def _detect_people(body, frame_bgr):
+    """
+    Person bounding boxes in the frame (possibly none).
+
+    CoreML can't run the detector's post-processing on an empty tensor, so on
+    Apple Silicon a frame with nobody in it can raise instead of returning no
+    boxes ("... has zero elements. This is not supported by the CoreML EP").
+    That case is treated as no people; any other error is raised.
+    """
+    try:
+        return body.det_model(frame_bgr)
+    except OrtFail as e:
+        if "zero elements" in str(e):
+            return []
+        raise
+
+
 def detect_poses_image(landmarker, frame_bgr):
     """Detect poses in one frame. Returns up to num_poses 33-landmark poses."""
-    keypoints, scores = landmarker.body(frame_bgr)
+    body = landmarker.body
+    if body.one_stage:
+        keypoints, scores = body.pose_model(frame_bgr)
+    else:
+        boxes = _detect_people(body, frame_bgr)
+        if len(boxes) == 0:
+            return []
+        keypoints, scores = body.pose_model(frame_bgr, bboxes=boxes)
     h, w = frame_bgr.shape[:2]
     # rtmlib already sorts people by descending detector score.
     n = min(len(keypoints), landmarker.num_poses)
