@@ -144,12 +144,12 @@ def process_all(videos, backend, backend_name, model_path, matte_crop=True,
 def _progress_callback(ui, i, title, subtitle):
     """Per-frame progress: window progress bar, or console every 10%."""
     if ui is None:
-        next_report = [0.1]
+        next_percent = [10]   # whole percentages, so steps don't drift (0.1 * 9 != 0.9)
 
         def console(fraction, frame_bgr, poses):
-            if fraction >= next_report[0]:
-                print(f"    {int(next_report[0] * 100):3d}%", flush=True)
-                next_report[0] += 0.1
+            while fraction * 100 >= next_percent[0] and next_percent[0] <= 100:
+                print(f"    {next_percent[0]:3d}%", flush=True)
+                next_percent[0] += 10
         return console
 
     def window(fraction, frame_bgr, poses):

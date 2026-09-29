@@ -104,6 +104,9 @@ def track_frames(job, tracker, landmarker, backend, on_progress=None):
         List of FrameResult, one per frame read, with `people` filled in.
     """
     info = job.info
+    # Frames to process: the container's count, less the black frames skipped at
+    # the start. Containers can overstate it, so progress is capped at 1.
+    expected = max(1, info.total_frames - info.first_frame_idx)
     cap = job.open_capture()
     frames = []
     try:
@@ -116,13 +119,15 @@ def track_frames(job, tracker, landmarker, backend, on_progress=None):
             if not ts_ms or ts_ms < 0:
                 ts_ms = frame_idx / info.fps * 1000.0
 
+            frame_bgr_last = frame_bgr
             H = tracker.update(frame_bgr)
             poses = backend.detect_poses(landmarker, frame_bgr, ts_ms)
             frames.append(FrameResult(frame_idx=frame_idx, time_s=ts_ms / 1000.0,
                                       H=H, people=list(poses)))
             if on_progress is not None:
-                total = info.total_frames
-                on_progress(len(frames) / total if total > 0 else 0.0, frame_bgr, poses)
+                on_progress(min(1.0, len(frames) / expected), frame_bgr, poses)
+        if on_progress is not None and frames:
+            on_progress(1.0, frame_bgr_last, poses)   # the video may hold fewer frames than stated
     finally:
         cap.release()
     return frames
