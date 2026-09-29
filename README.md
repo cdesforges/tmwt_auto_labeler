@@ -544,7 +544,7 @@ media/                    # Input videos (not tracked by git)
 models/                   # MediaPipe model file (the default --model path)
 assets/                   # ArUco marker specification; the top bar's UR shield and RNA rosette
 tests/                    # Unit tests (see Testing below)
-runs/                     # Output folders from earlier runs (data, not code)
+runs/                     # Output folders from earlier runs (data; not tracked by git)
 
 tmwt/
   core/                   # Data model, video access and file outputs

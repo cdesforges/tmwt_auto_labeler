@@ -4,4 +4,7 @@ __pycache__/
 *.pyc
 .idea/
 .claude/
-media
+
+# Data: input videos and run outputs never go to GitHub (patient data).
+media/
+runs/
