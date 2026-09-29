@@ -149,7 +149,7 @@ def ask_to_review(ui, jobs):
     lines = [("Analysis complete", GREEN), (f"{len(jobs)} video(s) analysed", WHITE)]
     lines += [(f"{count} {text}", color) for count, text, color in counts if count]
     choice = ui.show_message(lines, [("Start review", "review", KEY_ENTER),
-                                     ("Save all without reviewing", "skip", ())])
+                                     ("Save all without reviewing", "skip", (KEY_ESC,))])
     return choice == "review"
 
 

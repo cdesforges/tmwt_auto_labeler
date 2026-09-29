@@ -31,11 +31,18 @@ import platform
 from pose_common import coco17_to_landmarks
 
 try:
+    import onnxruntime
     from rtmlib import Body
     from onnxruntime.capi.onnxruntime_pybind11_state import Fail as OrtFail
 except ImportError:
     Body = None
     OrtFail = None
+else:
+    # Silence ONNX Runtime's own console log (fatal only). Otherwise it prints an
+    # error line for every empty frame that _detect_people deliberately handles,
+    # plus CoreML partitioning warnings at load. Real failures still surface as
+    # exceptions carrying the same message.
+    onnxruntime.set_default_logger_severity(4)
 
 # Default Body mode.
 DEFAULT_MODEL_PATH = "balanced"

@@ -21,8 +21,10 @@ pip install -r requirements.txt
 
 The labeler's window uses [pygame](https://www.pygame.org), installed by
 `requirements.txt`. OpenCV's own windows aren't used for it: on macOS they
-report mouse clicks in the wrong place. The window can be resized freely; the
-picture scales to fit and clicks stay accurate.
+report mouse clicks in the wrong place. The window runs in its own small
+process, because OpenCV and pygame bundle different versions of SDL2 that
+conflict when loaded together. The window can be resized freely; the picture
+scales to fit and clicks stay accurate.
 
 ### Optional pose backends
 
@@ -247,7 +249,8 @@ onset.py             # Hindsight walk-start detection on distance signals
 timing.py            # Walk start/end from the analysed frames
 review.py            # Phase 2: real-time playback and the review flow
 labeler_ui.py        # The labeler's screens: progress, playback, buttons, endpoint picking, sidebar
-window.py            # Resizable pygame window: shows a canvas scaled to fit, input in canvas pixels
+window.py            # The window as the labeler sees it: show a canvas, poll for keys and clicks
+window_server.py     # The window process: resizable pygame window, canvas scaled to fit
 annotate.py          # Frame drawing (skeleton, rope, info panel) shared with view.py
 data_export.py       # Per-video outputs (CSV, timing JSON, videos) and reading them back
 report.py            # End-of-run labeling report
