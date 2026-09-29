@@ -32,12 +32,14 @@ import traceback
 
 import analysis
 import data_export
+import people
 import pose_common
 import review
-from job import (REVIEW_APPROVED, REVIEW_REJECTED, STATUS_FAILED, STATUS_INCOMPLETE,
-                 STATUS_NEEDS_INPUT, STATUS_OK, VideoJob)
+from job import (END_BEHAVIORS, END_FIRST_FOOT, REVIEW_APPROVED, REVIEW_REJECTED,
+                 REVIEW_UNREVIEWED, STATUS_FAILED, STATUS_INCOMPLETE, STATUS_NEEDS_INPUT,
+                 STATUS_OK, VideoJob)
 from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ENTER, KEY_ESC, NEEDS_INPUT,
-                        ORANGE, RED, UNREVIEWED, WHITE, WORKING, LabelerUI)
+                        ORANGE, RED, UNREVIEWED, WHITE, WORKING, JumpTo, LabelerUI)
 from pose_backend import BACKENDS, get_backend
 import report
 
@@ -55,15 +57,28 @@ def find_videos(input_dir):
                   if os.path.splitext(f)[1].lower() in VIDEO_EXTENSIONS)
 
 
-def make_jobs(videos, output_dir):
+def make_jobs(videos, output_dir, end_behavior):
     """One VideoJob per video, with its CSV output path in `output_dir`."""
     return [VideoJob(path=v,
                      output_path=os.path.join(output_dir, os.path.splitext(os.path.basename(v))[0] + ".csv"),
-                     name=os.path.basename(v))
+                     name=os.path.basename(v),
+                     end_behavior=end_behavior)
             for v in videos]
 
 
 # --- Phase 1 -------------------------------------------------------------------
+
+def load_pose_model(ui, backend, backend_name, model_path):
+    """
+    Load the pose model before analysis starts, showing a message meanwhile
+    (it takes several seconds; rtmlib and mmpose then reuse it for every video).
+    """
+    print(f"Loading pose model ({backend_name}: {model_path})...")
+    if ui is not None:
+        ui.show_status("Loading pose model", [f"{backend_name}: {model_path}",
+                                              "This takes a few seconds."])
+    backend.create_landmarker(model_path, num_poses=people.MAX_PEOPLE).close()
+
 
 def run_analysis(jobs, ui, model_path, backend, matte_crop):
     """
@@ -135,10 +150,29 @@ def _analysis_state(job):
 
 # --- Phases 2 to 4 -------------------------------------------------------------
 
+def reviewable(jobs):
+    """Indices of the jobs that can be reviewed (analysis didn't fail outright)."""
+    return [i for i, job in enumerate(jobs) if job.status != STATUS_FAILED]
+
+
+def next_unreviewed(jobs, after):
+    """
+    The next reviewable job after index `after` that hasn't been approved or
+    rejected yet, wrapping round to the start; None when every one is decided.
+    """
+    pending = [i for i in reviewable(jobs) if jobs[i].review == REVIEW_UNREVIEWED]
+    later = [i for i in pending if i > after]
+    return (later or pending or [None])[0]
+
+
 def ask_to_review(ui, jobs):
     """
-    "Analysis complete" screen with what was found. Returns True if the user
-    chose to review, False to save everything without reviewing.
+    "Analysis complete" screen with what was found.
+
+    Returns:
+        The index of the job to start reviewing — the first one, or whichever
+        the user clicked in the sidebar — or None to save everything without
+        reviewing.
     """
     ui.active = None
     counts = [
@@ -149,19 +183,47 @@ def ask_to_review(ui, jobs):
     ]
     lines = [("Analysis complete", GREEN), (f"{len(jobs)} video(s) analysed", WHITE)]
     lines += [(f"{count} {text}", color) for count, text, color in counts if count]
-    choice = ui.show_message(lines, [("Start review", "review", KEY_ENTER),
-                                     ("Save all without reviewing", "skip", (KEY_ESC,))])
-    return choice == "review"
+    lines += [("Or click a video in the list to start reviewing there.", GREY)]
+    ui.review_targets = set(reviewable(jobs))
+    try:
+        choice = ui.show_message(lines, [("Start review", "review", KEY_ENTER),
+                                         ("Save all without reviewing", "skip", (KEY_ESC,))])
+    except JumpTo as jump:
+        return jump.index
+    finally:
+        ui.review_targets = set()
+    return next_unreviewed(jobs, -1) if choice == "review" else None
 
 
-def run_review(jobs, ui):
-    """Review every job that has something to review, until the user quits."""
-    for i, job in enumerate(jobs):
-        if job.status == STATUS_FAILED:
-            continue
-        if review.review_job(job, ui, i) == review.QUIT:
-            print("  Review stopped by user.")
-            return
+def run_review(jobs, ui, first):
+    """
+    Review jobs, starting with index `first`, until every reviewable job has
+    been approved or rejected, or the user quits.
+
+    After each decision the next unreviewed job follows (wrapping round to
+    earlier ones that were skipped); jobs already decided are never revisited
+    automatically. Clicking a file in the sidebar at any point leaves the
+    current review undecided and switches to that file — including one already
+    reviewed, whose result the new review replaces.
+    """
+    ui.review_targets = set(reviewable(jobs))
+    current = first
+    try:
+        while current is not None:
+            job = jobs[current]
+            state_before = (ui.states[current], ui.notes[current])
+            try:
+                if review.review_job(job, ui, current) == review.QUIT:
+                    print("  Review stopped by user.")
+                    return
+            except JumpTo as jump:
+                ui.set_state(current, *state_before)   # left undecided (or as before)
+                print(f"  Switching to {jobs[jump.index].name}")
+                current = jump.index
+                continue
+            current = next_unreviewed(jobs, current)
+    finally:
+        ui.review_targets = set()
 
 
 def save_outputs(jobs, ui):
@@ -223,6 +285,10 @@ def parse_args():
                         help="Pose backend to use (default: mediapipe).")
     parser.add_argument("--no_matte_crop", action="store_true",
                         help="Don't crop solid-colour mattes (letterbox / pillarbox bars).")
+    parser.add_argument("--endpoint_behavior", choices=END_BEHAVIORS, default=END_FIRST_FOOT,
+                        help="What ends the walk at the finish line: the first foot to cross "
+                             "it (first_foot, default) or the midpoint of the two ankles "
+                             "(ankle_midpoint).")
     parser.add_argument("--no_display", action="store_true",
                         help="Run unattended: no window and no review. Automatic results "
                              "are saved unreviewed; videos that need manual endpoints "
@@ -249,11 +315,14 @@ def main():
     for v in videos:
         print(f"  - {os.path.basename(v)}")
 
-    jobs = make_jobs(videos, output_dir)
+    jobs = make_jobs(videos, output_dir, args.endpoint_behavior)
     ui = None if args.no_display else LabelerUI([job.name for job in jobs])
+    load_pose_model(ui, backend, args.backend, model_path)
     cancelled = run_analysis(jobs, ui, model_path, backend, not args.no_matte_crop)
-    if ui is not None and not cancelled and ask_to_review(ui, jobs):
-        run_review(jobs, ui)
+    if ui is not None and not cancelled:
+        first = ask_to_review(ui, jobs)
+        if first is not None:
+            run_review(jobs, ui, first)
     save_outputs(jobs, ui)
     report_path, _ = report.write_report(jobs, output_dir, args.backend)
     if ui is not None:

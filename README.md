@@ -54,6 +54,7 @@ python label.py --input_dir <videos_dir> [options]
 | `--backend`    |          | `mediapipe`                            | Pose backend. One of `mediapipe`, `mmpose`, `rtmlib`.                                                                    |
 | `--model`      |          | _(backend-specific)_                   | Pose model. Interpretation depends on the backend (see below).                                                           |
 | `--no_matte_crop` |       | _off (cropping enabled)_               | Disable automatic cropping of solid-color mattes (letterbox / pillarbox bars) around the active picture.                 |
+| `--endpoint_behavior` |  | `first_foot`                          | What ends the walk at the finish line: the first foot to cross it (`first_foot`) or the midpoint of the two ankles (`ankle_midpoint`). |
 | `--no_display` |          | _off (window + review enabled)_        | Run unattended: no window and no review. Automatic results are saved unreviewed; videos needing manual endpoints are reported as failed. |
 
 #### `--model` values by backend
@@ -119,15 +120,20 @@ it with the mouse wheel or trackpad when there are many),
 colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
 **green** done, **orange** needs your input at review, **red** failed or rejected.
 
-1. **Analyse (unattended).** Each video in turn: find the rope endpoints, run
+1. **Analyse (unattended).** The pose model loads first (a few seconds, shown
+   in the window). Then each video in turn: find the rope endpoints, run
    pose estimation and ground tracking over every frame, and detect the walk
    start and end. The window shows `Analysing <file> (n of N)` with a progress
    bar and a **Cancel** button. Nothing asks for input here, so the whole batch
    can run unattended. When every video is done, an **Analysis complete**
    screen summarises what was found, with **Start review** and **Save all
-   without reviewing**.
+   without reviewing**; clicking a video in the sidebar starts the review there.
 2. **Review.** Each video is played back in real time with its detection
    overlaid, with **Pause / Resume** and **Skip to review** buttons below it.
+   You can click any video in the sidebar at any time to review it instead,
+   including one already reviewed (the new review replaces its result). After
+   each decision the next unreviewed video follows, wrapping round to any you
+   skipped; videos already decided are never revisited automatically.
    It then asks whether the detection was successful:
 
    | Button (key) | What happens |
@@ -181,9 +187,10 @@ takes no re-analysis.
 The walk timing is decided after each video has been fully analysed, so it can
 look back over the whole walk.
 
-When the far endpoint is the subject's standing position (both endpoints
-auto-detected), the end is the moment the ankles cross the near endpoint and the
-start is found by working backwards from it:
+The end is the moment the subject crosses the finish line (near endpoint): by
+default the first foot to cross it, or with `--endpoint_behavior ankle_midpoint`
+the midpoint of the two ankles. When the far endpoint is the subject's standing
+position, the start is found by working backwards from that end:
 
 1. **Confirm the walk.** Find the sustained forward advance of the ankles that
    leads into the end and trace it back to where it began. Fidgets, heel raises

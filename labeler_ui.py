@@ -21,6 +21,10 @@ Two regions:
 
 Buttons are described by specs, (text, value, keys): the label, the value
 returned when it is chosen, and the key codes that also choose it.
+
+During review, files in `review_targets` can be clicked in the sidebar. The
+click raises JumpTo from whatever screen is showing, so the caller (label.py)
+can switch to reviewing that file.
 """
 
 import time
@@ -228,6 +232,14 @@ def _bar_buttons(specs):
     return button_row(specs, MAIN_H - BAR_H + (BAR_H - BTN_H) // 2)
 
 
+class JumpTo(Exception):
+    """A file in the sidebar was clicked; `index` is which one."""
+
+    def __init__(self, index):
+        super().__init__(index)
+        self.index = index
+
+
 class LabelerUI:
     """The batch window. All drawing, key polling and clicks go through here."""
 
@@ -241,6 +253,8 @@ class LabelerUI:
         self._armed = None            # value of the button the mouse is pressed on
         self._armed_at = None         # when that press happened (perf_counter)
         self._wheel_accum = 0.0       # sidebar scroll not yet applied (fractional rows)
+        self.review_targets = set()   # files that can be clicked in the sidebar (see JumpTo)
+        self._armed_row = None        # sidebar row the mouse was pressed on
         self._window = Window(WINDOW, MAIN_W + SIDEBAR_W, MAIN_H)
 
     # --- Sidebar ---------------------------------------------------------------
@@ -266,7 +280,12 @@ class LabelerUI:
         panel = np.full((MAIN_H, SIDEBAR_W, 3), 25, dtype=np.uint8)
         x0 = 15
         cv2.putText(panel, f"Videos ({len(self.names)})", (x0, 35), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
+        if self.review_targets:
+            hint = "click to review"
+            (tw, _), _ = cv2.getTextSize(hint, FONT, 0.4, 1)
+            cv2.putText(panel, hint, (SIDEBAR_W - x0 - tw, 35), FONT, 0.4, GREY, 1, cv2.LINE_AA)
         cv2.line(panel, (x0, 48), (SIDEBAR_W - x0, 48), DIM, 1)
+        hovered = self._sidebar_row_at(self._window.mouse_pos)
 
         top, legend_h = _SIDEBAR_TOP, _SIDEBAR_LEGEND_H
         visible = self._sidebar_rows()
@@ -277,6 +296,10 @@ class LabelerUI:
             y = top + row * row_h
             if i == self.active:
                 cv2.rectangle(panel, (5, y - 4), (SIDEBAR_W - 5, y + row_h - 8), (55, 55, 55), -1)
+            elif i == hovered and i in self.review_targets:
+                shade = (40, 40, 40) if self._armed_row == i else (45, 45, 45)
+                cv2.rectangle(panel, (5, y - 4), (SIDEBAR_W - 5, y + row_h - 8), shade, -1)
+                cv2.rectangle(panel, (5, y - 4), (SIDEBAR_W - 5, y + row_h - 8), DIM, 1)
             name = _truncate(f"{i + 1}. {self.names[i]}", SIDEBAR_W - 2 * x0, 0.5)
             cv2.putText(panel, name, (x0, y + 14), FONT, 0.5, STATE_COLORS[self.states[i]], 1, cv2.LINE_AA)
             if self.notes[i]:
@@ -317,6 +340,16 @@ class LabelerUI:
             return 0
         return min(max(0, self._active - visible // 2), last_start)
 
+    def _sidebar_row_at(self, pt):
+        """Index of the file whose sidebar row is at canvas point `pt`, or None."""
+        if pt is None or pt[0] < MAIN_W:
+            return None
+        row = (pt[1] - (_SIDEBAR_TOP - 4)) // _SIDEBAR_ROW_H
+        if not 0 <= row < self._sidebar_rows():
+            return None
+        i = self._sidebar_first() + row
+        return i if i < len(self.names) else None
+
     def _apply_scrolling(self):
         """Scroll the sidebar by any wheel / trackpad movement made over it."""
         while self._window.wheel_events:
@@ -340,7 +373,7 @@ class LabelerUI:
     def _new_screen(self):
         """Forget clicks and presses left over from the previous screen."""
         self._window.mouse_events.clear()
-        self._armed = self._armed_at = None
+        self._armed = self._armed_at = self._armed_row = None
 
     def _draw_buttons(self, img, buttons):
         for b in buttons:
@@ -358,7 +391,10 @@ class LabelerUI:
         Returns:
             (value, pressed_at, other_clicks): the chosen button's value (or
             None), when it was pressed (perf_counter), and mouse presses that
-            didn't land on a button (canvas pixels).
+            didn't land on a button or a clickable sidebar row (canvas pixels).
+
+        Raises:
+            JumpTo: a file in review_targets was clicked in the sidebar.
         """
         now = time.perf_counter()
         for b in buttons:
@@ -369,6 +405,16 @@ class LabelerUI:
         events = self._window.mouse_events
         while events:
             kind, pt = events.popleft()
+            row = self._sidebar_row_at(pt)
+            if row is not None and row in self.review_targets:
+                # A sidebar file: clicked when released on the row it was pressed on.
+                if kind == "down":
+                    self._armed_row, self._armed = row, None
+                elif self._armed_row == row:
+                    self._armed_row = None
+                    raise JumpTo(row)
+                continue
+            self._armed_row = None if kind == "up" else self._armed_row
             hit = next((b for b in buttons if b.contains(pt)), None)
             if kind == "down":
                 if hit is None:
@@ -432,6 +478,16 @@ class LabelerUI:
         _put_centered(main, f"{fraction * 100:.0f}%", by + bar_h + 28, 0.55, WHITE, 1)
         value, _, _ = self._interact(main, buttons, 1)
         return value == "cancel"
+
+    def show_status(self, title, lines=()):
+        """A centred status message with no buttons (e.g. while a model loads); returns at once."""
+        main = np.zeros((MAIN_H, MAIN_W, 3), dtype=np.uint8)
+        y = MAIN_H // 2 - 15 * len(lines) - 20
+        _put_centered(main, title, y, 0.9, WHITE, 2)
+        for text in lines:
+            y += 34
+            _put_centered(main, text, y, 0.55, GREY, 1)
+        self._show(main, 1)
 
     def show_frame(self, img, wait_ms, specs, label=None):
         """

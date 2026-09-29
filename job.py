@@ -23,6 +23,11 @@ from video_io import VideoInfo
 # Real length of the walking course, in metres. far_ep is 0 m, near_ep is COURSE_M.
 COURSE_M = 10.0
 
+# How the walk's end is decided (label.py --endpoint_behavior; see timing.py).
+END_FIRST_FOOT = "first_foot"           # the first ankle to cross the finish line
+END_ANKLE_MIDPOINT = "ankle_midpoint"   # the midpoint of the two ankles crossing it
+END_BEHAVIORS = (END_FIRST_FOOT, END_ANKLE_MIDPOINT)
+
 # Analysis status (VideoJob.status).
 STATUS_PENDING = "pending"            # not analysed yet
 STATUS_OK = "ok"                      # endpoints and full timing found automatically
@@ -93,6 +98,7 @@ class VideoJob:
     # than a start line the user clicked; changes how the start is decided.
     far_ep_is_standing_spot: bool = False
 
+    end_behavior: str = END_FIRST_FOOT      # one of END_BEHAVIORS
     walk_start: Optional[float] = None      # seconds
     walk_end: Optional[float] = None
     timing_source: str = ""                 # "auto" | "manual"

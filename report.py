@@ -20,7 +20,7 @@ FAILED = "failed"
 RESULTS = (APPROVED, UNREVIEWED, REJECTED, FAILED)
 
 COLUMNS = [
-    "file", "result", "reason", "endpoints", "timing", "start_method",
+    "file", "result", "reason", "endpoints", "timing", "start_method", "end_rule",
     "start_s", "end_s", "duration_s", "speed_mps", "outputs_saved",
 ]
 
@@ -60,6 +60,7 @@ def _row(job):
         "endpoints": job.endpoint_source,
         "timing": job.timing_source,
         "start_method": job.timing_detail,
+        "end_rule": job.end_behavior,
         "start_s": _fmt(job.walk_start),
         "end_s": _fmt(job.walk_end),
         "duration_s": _fmt(job.duration),
@@ -99,8 +100,8 @@ def _write_markdown(path, rows, backend_name):
     lines += [f"  - {result}: {count}" for result, count in counts.items() if count]
     lines += [
         "",
-        "| File | Result | Reason | Endpoints | Timing | Start method | Start (s) | End (s) | Duration (s) | Speed (m/s) | Saved |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| File | Result | Reason | Endpoints | Timing | Start method | End rule | Start (s) | End (s) | Duration (s) | Speed (m/s) | Saved |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         lines.append("| " + " | ".join(

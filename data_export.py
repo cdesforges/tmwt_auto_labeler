@@ -141,6 +141,7 @@ def write_timing(job):
         "endpoints": job.endpoint_source,
         "timing": job.timing_source,
         "start_method": job.timing_detail,
+        "end_rule": job.end_behavior,
         "review": job.review,
     }
     with open(path, "w") as f:
