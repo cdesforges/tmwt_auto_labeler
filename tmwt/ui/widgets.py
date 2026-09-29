@@ -284,6 +284,24 @@ def draw_buttons(img, buttons, mouse, armed):
         b.draw(img, button_state(b, mouse, armed))
 
 
+def draw_badge(img, text, pos, color, scale=0.55, thickness=1, center=False):
+    """
+    `text` in `color` on a dark box with a border in the same colour, so it
+    stays readable over a video frame. `pos` is the box's top-left corner, or
+    with `center` its top-centre. Returns the box's bottom y.
+    """
+    pad = 8
+    (tw, th), _ = cv2.getTextSize(text, FONT, scale, thickness)
+    x, y = pos
+    if center:
+        x -= tw // 2 + pad
+    x1, y1 = x + tw + 2 * pad, y + th + 2 * pad
+    cv2.rectangle(img, (x, y), (x1, y1), (20, 20, 20), -1)
+    cv2.rectangle(img, (x, y), (x1, y1), color, 1)
+    cv2.putText(img, text, (x + pad, y + pad + th), FONT, scale, color, thickness, cv2.LINE_AA)
+    return y1
+
+
 def draw_tooltip(img, text, anchor):
     """
     A small label with `text` just below `anchor` (x, y), e.g. under a hovered

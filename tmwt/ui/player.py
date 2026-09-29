@@ -73,16 +73,11 @@ def seek_index(times, fraction):
 class Player:
     """Position, pause state and transport controls for one clip (see module docs)."""
 
-    def __init__(self, times, pause_keys=(KEY_SPACE,)):
-        """
-        Args:
-            times: every frame's time in seconds.
-            pause_keys: keys that toggle play / pause (Space by default).
-        """
+    def __init__(self, times):
+        """`times`: every frame's time in seconds. Space always plays / pauses."""
         self.times = times
         self.k = 0
         self.paused = False
-        self._pause_keys = pause_keys
         self._resume_after_seek = None      # set while the seek bar is dragged
         self._hold = False                  # stay on this frame for one more redraw
         self._clock = PlaybackClock()
@@ -95,11 +90,11 @@ class Player:
     def transport(self):
         """Button specs for frame back, play / pause and frame forward."""
         return [("Back one frame", "back", (), "prev_frame"),
-                ("Play" if self.paused else "Pause", "toggle", self._pause_keys,
+                ("Play" if self.paused else "Pause", "toggle", (KEY_SPACE,),
                  "play" if self.paused else "pause"),
                 ("Forward one frame", "forward", (), "next_frame")]
 
-    def show(self, ui, image, specs, label=None, marks=(), hotkeys=None):
+    def show(self, ui, image, specs, label=None, marks=(), hotkeys=None, alert=None):
         """
         Show `image` (frame k) with `specs` and the seek bar, waiting as long as
         real-time pacing needs, and apply any transport control used.
@@ -107,6 +102,7 @@ class Player:
         Args:
             marks: [(time, colour)] to mark on the seek bar.
             hotkeys: extra {key: value} for keys without buttons.
+            alert: error text to show over the frame (see LabelerUI.show_frame).
 
         Returns:
             (value, pressed_at): a button value the caller has to handle (None
@@ -121,7 +117,7 @@ class Player:
         keys = {KEY_LEFT: "back", KEY_RIGHT: "forward", **(hotkeys or {})}
         dialogs = ui.dialogs_shown
         value, pressed_at = ui.show_frame(image, wait_ms, specs, label, hotkeys=keys,
-                                          seek=seek_state(self.times, self.k, marks))
+                                          seek=seek_state(self.times, self.k, marks), alert=alert)
         if ui.dialogs_shown != dialogs:
             self._clock.restart()                    # a dialog paused everything: carry on from here
         if self._apply(value):

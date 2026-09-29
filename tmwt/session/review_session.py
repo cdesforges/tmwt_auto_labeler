@@ -65,6 +65,9 @@ def run(jobs, ui, output_dir, review_first=True):
     closing the window) keeps the review progress for next time, and "quit
     without saving" discards it; neither writes any outputs.
 
+    Returns:
+        True if the outputs were saved; False if the user stopped the review.
+
     Raises:
         WindowClosed: the user closed the window (progress is saved first).
     """
@@ -75,12 +78,12 @@ def run(jobs, ui, output_dir, review_first=True):
             review_progress.save(jobs, ui.active)
             print("\nReview progress saved; no outputs written yet. Run the review "
                   "again to continue where you left off (or start over).")
-            return
+            return False
         except QuitWithoutSaving:
             review_progress.clear(jobs)
             print("\nQuit without saving: this review's decisions were discarded and "
                   "no outputs were written.")
-            return
+            return False
         except WindowClosed:
             review_progress.save(jobs, ui.active)
             print("\nWindow closed. Your review progress is kept: run the review "
@@ -94,6 +97,7 @@ def run(jobs, ui, output_dir, review_first=True):
     report_path, _ = report.write_report(jobs, output_dir, _pose_models(jobs))
     if ui is not None:
         show_summary(ui, jobs, report_path)
+    return True
 
 
 def _review(jobs, ui):
@@ -128,13 +132,20 @@ def ask_resume(ui, progress):
     """"Continue your previous review?" screen. Returns True to continue it."""
     approved, skipped, todo = review_progress.counts(progress)
     ui.active = None
-    choice = ui.show_message([
-        ("Continue your previous review?", WHITE),
-        (f"Saved {progress['saved'].replace('T', ' at ')}: {approved} approved, "
-         f"{skipped} skipped, {todo} still to review.", GREY),
-        ("Start over discards those decisions.", GREY),
-    ], [("Continue", "continue", KEY_ENTER + (KEY_ESC,)), ("Start over", "restart", ())])
-    return choice == "continue"
+    while True:
+        choice = ui.show_message([
+            ("Continue your previous review?", WHITE),
+            (f"Saved {progress['saved'].replace('T', ' at ')}: {approved} approved, "
+             f"{skipped} skipped, {todo} still to review.", GREY),
+            ("Start over discards those decisions.", GREY),
+        ], [("Continue", "continue", KEY_ENTER + (KEY_ESC,)), ("Start over", "restart", ())])
+        if choice == "continue":
+            return True
+        if ui.confirm("Start over?",
+                      [f"This discards the saved decisions ({approved} approved, {skipped} skipped)",
+                       "and starts the review from the beginning."],
+                      "Start over"):
+            return False
 
 
 def _show_restored_states(jobs, ui):

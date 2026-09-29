@@ -189,8 +189,8 @@ review) a **save** button (floppy disk); the folder's name in the middle
 
 - **Save** (floppy disk): save your review progress and quit, from any screen.
 - **X**: quit. During a review it asks first: **Save progress & quit**, **Quit
-  without saving** (discards this review's decisions), or **Cancel** (carry on
-  where you were). Outside a review it quits straight away, like closing the
+  without saving** (discards this review's decisions, after asking whether
+  you're sure), or **Cancel** (carry on where you were). Outside a review it quits straight away, like closing the
   window.
 
 1. **Analyse (unattended).** The pose model loads first (a few seconds, shown
@@ -218,7 +218,7 @@ review) a **save** button (floppy disk); the folder's name in the middle
    |---|---|
    | Looks good (`1` / Enter) | The video is marked approved and the next one starts right away. |
    | Rope endpoints inaccurate (`2`) | Re-place the endpoints on the first frame (see [Endpoint detection](#endpoint-detection)). Timing is recomputed from the cached analysis and the video replays. |
-   | Walk start/stop inaccurate (`3`) | The video replays in real time. Click **Mark start** when the walk starts and **Mark stop** when it ends (Space also works). The mark uses the frame on screen when the button was pressed. |
+   | Walk start/stop inaccurate (`3`) | The video replays in real time. Click **Mark start** when the walk starts and **Mark stop** when it ends. Both buttons stay available, so you can re-mark either as often as you like (scrub or step back first if needed); the latest mark counts. `M` marks start and stop in turn (the badge at the top left says which is next); Space plays / pauses as usual. The marks are shown at the top left, and a stop before the start is flagged in red until you fix it. Each mark uses the frame on screen when the button was pressed. |
    | Wrong person tracked (`5`) | Only shown when several people were tracked. Click the person doing the walk test on a frame showing everyone; timing is recomputed for them and the video replays. |
    | Skip this file (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
    | Replay (`R`) | Play the video again. |
@@ -239,7 +239,8 @@ review) a **save** button (floppy disk); the folder's name in the middle
    decision and whenever you switch video) to `tmwt_analysis/review_progress.json`.
    If you save your progress and quit (top bar) or close the window, the next review of the
    folder asks whether to **Continue** where you left off (reopening the video
-   you were on) or **Start over**. The file is deleted once the outputs are
+   you were on) or **Start over** (which asks whether you're sure, since it
+   discards those decisions). The file is deleted once the outputs are
    saved. Progress for a video that has since been replaced or re-processed is
    ignored.
 4. **Report.** `labeling_report.csv` and `labeling_report.md` summarise every

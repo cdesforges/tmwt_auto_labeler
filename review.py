@@ -61,13 +61,14 @@ def main():
                                                 heading=folder_title(args.input_dir))
     try:
         review_session.load_jobs(jobs, ui)
-        review_session.run(jobs, ui, output_dir)
+        saved = review_session.run(jobs, ui, output_dir)
     except WindowClosed:
         return
     finally:
         if ui is not None:
             ui.close()
-    print(f"\nAll done! Output files are in '{output_dir}'.")
+    if saved:
+        print(f"\nAll done! Output files are in '{output_dir}'.")
 
 
 if __name__ == "__main__":

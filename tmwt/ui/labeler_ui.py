@@ -45,7 +45,7 @@ from tmwt.ui.sidebar import DEFAULT_LEGEND, Sidebar, SIDEBAR_W
 from tmwt.ui.top_bar import TOPBAR_H, TopBar
 from tmwt.ui.widgets import (BAR_H, BTN_H, FONT, GREY, HEADER_H, KEY_BACKSPACE, KEY_ENTER,
                              KEY_ESC, MAIN_H, MAIN_W, ORANGE, RED, WHITE, YELLOW, BLUE, SEEK_H,
-                             KeyedButton, bar_buttons, button_row, dimmed, draw_buttons,
+                             KeyedButton, bar_buttons, button_row, dimmed, draw_badge, draw_buttons,
                              draw_seek_bar, draw_tooltip, frame_screen, on_seek_bar,
                              put_centered, seek_fraction)
 from tmwt.ui.window import Window
@@ -312,14 +312,22 @@ class LabelerUI:
             SaveAndQuit, QuitWithoutSaving: the user's choice.
         """
         self._in_dialog = True
+        background = self._last_main
         try:
-            choice = self.show_message([
-                ("Quit the review?", WHITE),
-                ("Save your progress to continue this review later,", GREY),
-                ("or quit without saving to discard its decisions.", GREY),
-            ], [("Save progress & quit", "save", KEY_ENTER),
-                ("Quit without saving", "discard", ()),
-                ("Cancel", "cancel", (KEY_ESC,))], background=self._last_main, dim=0.35)
+            while True:
+                choice = self.show_message([
+                    ("Quit the review?", WHITE),
+                    ("Save your progress to continue this review later,", GREY),
+                    ("or quit without saving to discard its decisions.", GREY),
+                ], [("Save progress & quit", "save", KEY_ENTER),
+                    ("Quit without saving", "discard", ()),
+                    ("Cancel", "cancel", (KEY_ESC,))], background=background, dim=0.35)
+                if choice != "discard" or self.confirm(
+                        "Quit without saving?",
+                        ["Every decision in this review will be discarded.",
+                         "The videos stay analysed, but you'll review them from the start."],
+                        "Discard and quit", background=background):
+                    break
         finally:
             self._in_dialog = False
             self.dialogs_shown += 1
@@ -390,17 +398,18 @@ class LabelerUI:
             put_centered(main, text, y, 0.55, GREY, 1)
         self._show(main, 1)
 
-    def show_frame(self, img, wait_ms, specs, label=None, hotkeys=None, seek=None):
+    def show_frame(self, img, wait_ms, specs, label=None, hotkeys=None, seek=None, alert=None):
         """
         One playback frame above a bar of buttons, shown for up to wait_ms.
 
         Args:
             specs: button specs for the bar, (text, value, keys).
-            label: optional text at the left of the bar (e.g. the mode).
+            label: optional text in a badge at the top left (e.g. the mode).
             hotkeys: optional {key: value} for keys with no button.
             seek: optional (fraction, markers, text) to show a seek bar above
                 the buttons: the position (0-1), [(fraction, colour)] marks,
                 and text shown at its right (e.g. the time).
+            alert: optional error text, in red, centred above the seek bar.
 
         Returns:
             (value, pressed_at): the chosen button's value or None, and when it
@@ -408,9 +417,13 @@ class LabelerUI:
             While the seek bar is dragged, value is ("seek", fraction); when
             it's released, ("seek_end", fraction).
         """
-        main, _, _, _ = frame_screen(img, bottom=BAR_H + (SEEK_H if seek else 0))
+        bottom = BAR_H + (SEEK_H if seek else 0)
+        main, _, _, _ = frame_screen(img, bottom=bottom)
         if label:
-            cv2.putText(main, label, (16, MAIN_H - BAR_H // 2 + 6), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
+            draw_badge(main, label, (12, 12), YELLOW)
+        if alert:
+            draw_badge(main, alert, (MAIN_W // 2, MAIN_H - bottom - 46), RED, scale=0.6,
+                       thickness=2, center=True)
         if seek:
             mouse = self._mouse(self.main)
             fraction = seek_fraction(mouse[0]) if self._seeking else seek[0]
@@ -438,6 +451,17 @@ class LabelerUI:
             put_centered(main, text, y, 0.8 if k == 0 else 0.55, color, 2 if k == 0 else 1)
             y += 45 if k == 0 else 30
         return self._wait_for_choice(main, button_row(specs, y + 20))
+
+    def confirm(self, title, lines, yes, no="Go back", background=None):
+        """
+        "Are you sure?" screen before something that can't be undone: `title`
+        (in orange), explanation `lines`, and the buttons `no` (Enter / Esc,
+        the safe choice) and `yes`. Returns True if the user chose `yes`.
+        """
+        choice = self.show_message([(title, ORANGE)] + [(text, GREY) for text in lines],
+                                   [(no, "no", KEY_ENTER + (KEY_ESC,)), (yes, "yes", ())],
+                                   background=background, dim=0.2)
+        return choice == "yes"
 
     def ask_review(self, background, summary_lines, note=None, wrong_person=False):
         """

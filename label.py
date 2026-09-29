@@ -96,14 +96,15 @@ def main():
                                            reprocess=args.reprocess, ui=ui)
         jobs = review_session.make_jobs(videos, output_dir, args.endpoint_behavior)
         review_session.load_jobs(jobs, ui)
-        review_session.run(jobs, ui, output_dir, review_first=not cancelled)
+        saved = review_session.run(jobs, ui, output_dir, review_first=not cancelled)
     except WindowClosed:
         print("Window closed; stopping. Processed videos keep their analysis files.")
         return
     finally:
         if ui is not None:
             ui.close()
-    print(f"\nAll done! Output files are in '{output_dir}'.")
+    if saved:
+        print(f"\nAll done! Output files are in '{output_dir}'.")
 
 
 if __name__ == "__main__":

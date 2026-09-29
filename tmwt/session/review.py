@@ -27,7 +27,7 @@ from tmwt.core import video_io
 from tmwt.core.job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_NO_BODY
 from tmwt.ui.sidebar import APPROVED_MARK, DONE, FAILED, REJECTED_MARK, WORKING
 from tmwt.ui.player import Player
-from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, KEY_SPACE, ORANGE, RED, WHITE
+from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE
 
 # review_job result: finish the review now (go to "Review complete"). (Stopping
 # to continue later is the top bar's job: see labeler_ui.SaveAndQuit.)
@@ -37,6 +37,10 @@ _REPLAY = "replay"        # complete timing found: play the video with it
 _PROMPT = "prompt"        # back to the review prompt without replaying
 _CANCELLED = "cancelled"  # the user cancelled endpoint picking
 _SKIP = "skip"            # the user chose to skip the file
+# Manual timing: M marks the start, then the stop, then the start again, and so
+# on (the badge says which is next). Space always plays / pauses.
+_MARK_KEYS = (ord("m"), ord("M"))
+_STOP_BEFORE_START = "Stop is before start: mark them again"
 
 
 def review_job(job, ui, i, start_at_menu=False):
@@ -122,7 +126,8 @@ def _time_manually(job, ui, background):
         ("Manual timing", WHITE),
         ("The video will replay in real time.", GREY),
         ("Click Mark start when the walk starts, then Mark stop when it ends.", GREY),
-        ("(Space works too.)", GREY),
+        ("Click either one again to re-mark it. M marks start / stop in turn;", GREY),
+        ("Space plays and pauses.", GREY),
     ], [("Start manual timing", "start", KEY_ENTER), ("Cancel", "cancel", (KEY_ESC,))],
         background=background)
     if choice == "cancel":
@@ -130,6 +135,8 @@ def _time_manually(job, ui, background):
     start, end, _ = playback(job, ui, manual_timing=True)
     if start is None or end is None:
         return "Manual timing needs both a start and a stop mark. Timing unchanged."
+    if end <= start:
+        return "The stop mark was before the start mark. Timing unchanged."
     job.walk_start, job.walk_end = start, end
     job.timing_source, job.timing_detail = "manual", "marked during replay"
     return None
@@ -139,12 +146,18 @@ def playback(job, ui, manual_timing=False):
     """
     Play the job back in real time with its detection drawn on. Below the
     picture: a seek bar (drag or click to scrub; the walk's start and end are
-    marked), frame-back / play-pause / frame-forward buttons (player.py), Skip to
-    review, and in manual timing Mark start then Mark stop, and Done.
+    marked), frame-back / play-pause / frame-forward buttons (player.py), and
+    Skip to review.
+
+    In manual timing, Mark start and Mark stop are always there and can be
+    clicked any number of times (the latest click counts), then Done. M
+    presses them in turn (start, stop, start, ...). The
+    marks are shown in a badge at the top left; a stop before the start is
+    shown as an error until one of them is marked again.
 
     Frames come from a video_io.FrameSource, so scrubbing and stepping back show
     exactly the frames the analysis used. Marks use the frame on screen when the
-    button was pressed (or Space was hit), not when it was released.
+    button was pressed (or its key was hit), not when it was released.
 
     Returns:
         (start, end, last_frame): the timing shown (the marks, in manual
@@ -156,11 +169,9 @@ def playback(job, ui, manual_timing=False):
     else:
         start, end = job.walk_start, job.walk_end
         waiting = annotate.WAITING_AUTO
-    label = "MANUAL TIMING" if manual_timing else None
-    # In manual timing Space marks, so P pauses.
-    player = Player([f.time_s for f in job.frames],
-                    pause_keys=(ord("p"), ord("P")) if manual_timing else (KEY_SPACE,))
+    player = Player([f.time_s for f in job.frames])
     source = video_io.FrameSource(job)
+    m_marks = "mark_start"   # what M does next
     ui.start_playback()
     last = None
     try:
@@ -168,29 +179,51 @@ def playback(job, ui, manual_timing=False):
             frame = source.get(player.k)
             if frame is None:
                 break
-            last, _ = annotate.render_frame(frame, job.frames[player.k], start, end, waiting)
+            backwards = start is not None and end is not None and end <= start
+            # A stop before the start isn't a walk: don't draw it as finished.
+            last, _ = annotate.render_frame(frame, job.frames[player.k], start,
+                                            None if backwards else end, waiting)
             specs = player.transport() + [
                 ("Done (Enter)" if manual_timing else "Skip to review (Enter)", "skip", KEY_ENTER)]
-            if manual_timing and end is None:
-                specs.insert(0, ("Mark start (Space)" if start is None else "Mark stop (Space)",
-                                 "mark", (KEY_SPACE,)))
-            value, pressed_at = player.show(ui, last, specs, label, marks=[(start, GREEN), (end, RED)])
+            label = alert = None
+            if manual_timing:
+                specs = [_mark_button("start", m_marks), _mark_button("stop", m_marks)] + specs
+                label = (f"MANUAL TIMING    start {_mark_text(start)}    stop {_mark_text(end)}"
+                         f"    M marks the {m_marks[5:]} next")
+                alert = _STOP_BEFORE_START if backwards else None
+            value, pressed_at = player.show(ui, last, specs, label, marks=[(start, GREEN), (end, RED)],
+                                            alert=alert)
 
             if value == "skip":
                 break
-            if value == "mark":
+            if value in ("mark_start", "mark_stop"):
                 t = player.time_on_screen(pressed_at)
-                if start is None:
+                m_marks = "mark_stop" if value == "mark_start" else "mark_start"
+                if value == "mark_start":
                     start = t
-                    print(f"  Walk STARTED (manual) at {start:.3f}s")
-                elif t > start:
+                    print(f"  Walk start marked (manual) at {start:.3f}s")
+                else:
                     end = t
-                    print(f"  Walk FINISHED (manual) at {end:.3f}s")
+                    print(f"  Walk stop marked (manual) at {end:.3f}s")
             if not player.advance():
                 break
     finally:
         source.close()
     return start, end, last
+
+
+def _mark_button(which, m_marks):
+    """
+    Mark start / Mark stop button spec. Both show "(M)", so their widths don't
+    change as marks are made; the key only works on the one M presses next.
+    """
+    value = f"mark_{which}"
+    return (f"Mark {which} (M)", value, _MARK_KEYS if value == m_marks else ())
+
+
+def _mark_text(t):
+    """A manual mark for the badge: its time, or a dash if not marked yet."""
+    return "--" if t is None else f"{t:.2f}s"
 
 
 def summary_lines(job):
