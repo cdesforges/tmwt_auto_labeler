@@ -12,9 +12,9 @@ The top bar across the labeler window:
   - The logos (LOGO_PATHS): the University of Rochester's shield and the RNA
     Institute's rosette, without their names (assets/*_shield.png,
     *_rosette.png, with transparency for this dark bar), side by side with a
-    thin divider and some space around them. Any file that's missing is left
-    out, and in a window too narrow for them all the leftmost are left out
-    first (they never overlap the buttons).
+    thin divider and some space around them; hovering over one shows its name.
+    Any file that's missing is left out, and in a window too narrow for them
+    all the leftmost are left out first (they never overlap the buttons).
 """
 
 import os
@@ -37,8 +37,11 @@ _ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.a
 # Institute's rosette, cut from its logo (albany.edu/rna).
 UR_LOGO_PATH = os.path.join(_ASSETS, "university_of_rochester_shield.png")
 RNA_LOGO_PATH = os.path.join(_ASSETS, "rna_institute_rosette.png")
-# The logos shown at the right of the bar, left to right.
+# The logos shown at the right of the bar, left to right, and the names shown
+# when the pointer is over them.
 LOGO_PATHS = (UR_LOGO_PATH, RNA_LOGO_PATH)
+LOGO_NAMES = {UR_LOGO_PATH: "University of Rochester",
+              RNA_LOGO_PATH: "The RNA Institute, University at Albany"}
 
 _BG = (32, 32, 32)
 _PAD = 8                   # gap between the bar's edge and its buttons
@@ -95,8 +98,12 @@ class TopBar(Panel):
         self.close_button = IconButton((_PAD, y, _BTN, _BTN), "Quit", CLOSE, icon="close", icon_size=10)
         self.save_button = IconButton((2 * _PAD + _BTN, y, _BTN, _BTN), "Save progress & quit",
                                       SAVE, icon="save", icon_size=10)
-        # Loaded logos, left to right (any that can't be read are left out).
-        self._logos = [logo for logo in (load_logo(p, _LOGO_H) for p in logo_paths) if logo]
+        # Loaded logos, left to right (any that can't be read are left out),
+        # and their names (LOGO_NAMES, else the file's name).
+        loaded = [(p, load_logo(p, _LOGO_H)) for p in logo_paths]
+        self._logos = [logo for _, logo in loaded if logo]
+        self._logo_names = [LOGO_NAMES.get(p, os.path.splitext(os.path.basename(p))[0])
+                            for p, logo in loaded if logo]
 
     @property
     def buttons(self):
@@ -131,6 +138,25 @@ class TopBar(Panel):
         """Width of the logos shown, together with the gaps between them."""
         return _logos_width(self.shown_logos())
 
+    def logo_places(self):
+        """[(x, y, w, h, name)] of the logos shown, in bar pixels, left to right."""
+        shown = self.shown_logos()
+        names = self._logo_names[len(self._logos) - len(shown):]
+        places = []
+        x = self.w - _LOGO_MARGIN - _logos_width(shown)
+        for (bgr, _), name in zip(shown, names):
+            h, w = bgr.shape[:2]
+            places.append((x, (self.h - h) // 2, w, h, name))
+            x += w + _LOGO_GAP
+        return places
+
+    def hovered_logo(self, mouse):
+        """The (x, y, w, h, name) of the logo under `mouse` (bar pixels), or None; for its label."""
+        if mouse is None:
+            return None
+        return next((p for p in self.logo_places()
+                     if p[0] <= mouse[0] < p[0] + p[2] and p[1] <= mouse[1] < p[1] + p[3]), None)
+
     def render(self, mouse, armed):
         img = np.full((self.h, self.w, 3), _BG, np.uint8)
         cv2.line(img, (0, self.h - 1), (self.w, self.h - 1), DIM, 1)
@@ -142,17 +168,13 @@ class TopBar(Panel):
             cv2.putText(img, text, ((self.w - tw) // 2, (self.h + th) // 2), FONT, _TITLE_SCALE,
                         WHITE, _TITLE_THICKNESS, cv2.LINE_AA)
 
-        x = self.w - _LOGO_MARGIN - self.logos_width()
-        for n, (bgr, alpha) in enumerate(self.shown_logos()):
+        for n, ((bgr, alpha), (x, y, lw, lh, _)) in enumerate(zip(self.shown_logos(), self.logo_places())):
             if n:   # a thin divider between two logos
                 mid = x - _LOGO_GAP // 2
                 top = (self.h - _LOGO_H) // 2
                 cv2.line(img, (mid, top), (mid, top + _LOGO_H - 1), DIM, 1)
-            lh, lw = bgr.shape[:2]
-            y = (self.h - lh) // 2
             region = img[y:y + lh, x:x + lw].astype(np.float32)
             img[y:y + lh, x:x + lw] = (region * (1 - alpha) + bgr * alpha).astype(np.uint8)
-            x += lw + _LOGO_GAP
         return img
 
     def hovered_button(self, mouse):

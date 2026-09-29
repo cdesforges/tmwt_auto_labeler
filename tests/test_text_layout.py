@@ -414,6 +414,12 @@ class TopBarTest(unittest.TestCase):
                                 self.assertGreaterEqual(region[0], 0)
                                 self.assertLess(region[1], width)
 
+    def test_logo_labels_fit_the_window(self):
+        # draw_tooltip keeps labels inside the image; they just need to be narrower than it
+        from tmwt.ui import top_bar
+        for name in top_bar.LOGO_NAMES.values():
+            self.assertLess(size(name, 0.45)[0] + 12, MAIN_W)
+
     def test_logos_drop_out_before_they_would_collide(self):
         wide, narrow, tiny = TopBar(1280), TopBar(160), TopBar(100)
         self.assertEqual(len(wide.shown_logos()), 2)

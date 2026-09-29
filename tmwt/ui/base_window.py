@@ -156,9 +156,14 @@ class BaseWindow:
         bar = self.top_bar.render(self.top_bar.local_if_inside(pos), self._armed)
         side = self.sidebar.render(self.sidebar.local_if_inside(pos), self._armed_row)
         canvas = np.vstack([bar, np.hstack([main, side])])
-        hovered = self.top_bar.hovered_button(self.top_bar.local_if_inside(pos))
+        bar_pos = self.top_bar.local_if_inside(pos)
+        hovered = self.top_bar.hovered_button(bar_pos)
         if hovered is not None and self._armed is None:
-            draw_tooltip(canvas, hovered.text, (hovered.x, hovered.y + hovered.h))
+            draw_tooltip(canvas, hovered.tooltip, (hovered.x, hovered.y + hovered.h))
+        logo = self.top_bar.hovered_logo(bar_pos)
+        if logo is not None and self._armed is None:
+            x, y, _, h, name = logo
+            draw_tooltip(canvas, name, (x, y + h + 4))   # kept inside the window at the right edge
         return canvas
 
     def _show(self, main, wait_ms):

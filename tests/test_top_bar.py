@@ -5,6 +5,7 @@ it. Run from the repository root:
     python -m unittest discover tests
 """
 
+import os
 import unittest
 
 import cv2
@@ -199,3 +200,44 @@ class LogosTest(unittest.TestCase):
         from tmwt.ui import top_bar
         bar = TopBar(1280, logo_paths=(top_bar.RNA_LOGO_PATH, "missing.png"))
         self.assertEqual(len(bar._logos), 1)
+
+
+class LogoLabelTest(unittest.TestCase):
+    """Hovering over a logo shows its name (base_window draws it)."""
+
+    def test_places_match_what_is_drawn(self):
+        bar = TopBar(1280, "control_vids")
+        img = bar.render(None, None)
+        plain = TopBar(1280, "control_vids", logo_paths=()).render(None, None)
+        drawn = np.where((img != plain).any(axis=2))
+        places = bar.logo_places()
+        self.assertEqual([p[4] for p in places], ["University of Rochester",
+                                                  "The RNA Institute, University at Albany"])
+        # every drawn logo pixel is inside a logo's place, or on the divider between them
+        left = min(p[0] for p in places)
+        right = max(p[0] + p[2] for p in places)
+        self.assertGreaterEqual(drawn[1].min(), left)
+        self.assertLessEqual(drawn[1].max(), right - 1)
+
+    def test_hovered_logo(self):
+        bar = TopBar(1280)
+        for x, y, w, h, name in bar.logo_places():
+            self.assertEqual(bar.hovered_logo((x + w // 2, y + h // 2))[4], name)
+        gap_x = bar.logo_places()[0][0] + bar.logo_places()[0][2] + 2      # the gap between them
+        self.assertIsNone(bar.hovered_logo((gap_x, TOPBAR_H // 2)))
+        self.assertIsNone(bar.hovered_logo(None))
+        self.assertIsNone(bar.hovered_logo((10, 10)))                      # over the buttons
+
+    def test_a_logo_without_a_known_name_uses_its_file_name(self):
+        bar = TopBar(1280, logo_paths=(top_bar.UR_LOGO_PATH, top_bar.RNA_LOGO_PATH))
+        self.assertEqual(len(bar.logo_places()), 2)
+        import shutil
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = shutil.copy(top_bar.RNA_LOGO_PATH, os.path.join(tmp, "lab_logo.png"))
+            self.assertEqual(TopBar(1280, logo_paths=(path,)).logo_places()[0][4], "lab_logo")
+
+    def test_names_follow_logos_left_out_in_a_narrow_bar(self):
+        bar = TopBar(160)
+        names = [p[4] for p in bar.logo_places()]
+        self.assertEqual(names, ["The RNA Institute, University at Albany"])   # the leftmost goes first

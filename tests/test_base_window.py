@@ -522,3 +522,30 @@ class ButtonTooltipTest(WindowTestCase):
         (ok,) = button_row([("OK", "ok", ())], 300)
         self.show([ok], centre(ok))
         self.assertFalse(self.drawn_near(ok))
+
+
+class LogoLabelWindowTest(WindowTestCase):
+    """Hovering over a top bar logo draws its name below it, inside the window."""
+
+    def compose_with_pointer(self, pt):
+        self.win.mouse_pos = pt
+        return self.ui._compose(np.zeros((MAIN_H, MAIN_W, 3), np.uint8))
+
+    def test_label_appears_under_the_hovered_logo(self):
+        away = self.compose_with_pointer(None)
+        for x, y, w, h, name in self.ui.top_bar.logo_places():
+            with self.subTest(name=name):
+                over = self.compose_with_pointer((x + w // 2, y + h // 2))
+                below = slice(y + h, y + h + 34)
+                changed = np.where((over[below] != away[below]).any(axis=2))
+                self.assertTrue(changed[0].size, "no label drawn")
+                self.assertLess(changed[1].max(), CANVAS_W)              # within the window
+                self.assertGreaterEqual(changed[1].min(), 0)
+
+    def test_no_label_while_a_button_is_held(self):
+        x, y, w, h, _ = self.ui.top_bar.logo_places()[-1]
+        self.ui._armed = "ok"
+        away = self.compose_with_pointer(None)
+        over = self.compose_with_pointer((x + w // 2, y + h // 2))
+        below = slice(y + h, y + h + 34)
+        self.assertFalse((over[below] != away[below]).any())

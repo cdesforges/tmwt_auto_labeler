@@ -192,7 +192,7 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
 The **top bar** is always there: an **X** at the top left, then (during a
 review) a **save** button (floppy disk); the folder's name in the middle
 (shortened in the middle if it's long); the University of Rochester shield
-and the RNA Institute rosette at the right.
+and the RNA Institute rosette at the right (hover over one to see its name).
 
 - **Save** (floppy disk): save your review progress and quit, from any screen.
 - **X**: quit. During a review it asks first: **Save progress & quit**, **Quit
