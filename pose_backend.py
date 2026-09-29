@@ -9,7 +9,8 @@ Each backend module exposes the same small inference API:
   detect_poses(landmarker, frame_bgr, timestamp_ms) -> list[pose]
   detect_poses_image(landmarker, frame_bgr) -> list[pose]
 
-and every landmarker has close(). Poses are lists of landmarks in the layout
+and every landmarker has close(). Backends also have set_device(device) — one of
+"auto", "cpu", "cuda", "mps" — and provenance() -> {"device", "versions"}. Poses are lists of landmarks in the layout
 described in pose_common.py (including the feet), which also holds the drawing
 and ankle helpers.
 
@@ -19,6 +20,7 @@ landmarker tracks between frames, so a fresh one is needed per video anyway).
 """
 
 BACKENDS = ("mediapipe", "mmpose", "rtmlib")
+DEVICES = ("auto", "cpu", "cuda", "mps")
 
 
 def get_backend(name):

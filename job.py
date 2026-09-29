@@ -4,8 +4,12 @@ per analysed frame.
 
 A job moves through the run like this:
 
-  analysis.analyze_job  -> fills info, frames and (if found automatically) the
-                           endpoints and timing; sets `status`
+  analysis.process_video -> the slow part (pose estimation, camera tracking,
+                            ArUco); fills info, frames and aruco_finish. Saved to
+                            and loaded from an analysis file (analysis_file.py),
+                            so it can run on another machine.
+  analysis.interpret     -> the fast part: people tracks, subject, endpoints and
+                            automatic timing; sets `status`
   review.review_job     -> may change endpoints / timing; sets `review`
   data_export.save_job  -> writes the outputs after all reviews; sets `saved`
   report.write_report   -> summarises every job
@@ -90,6 +94,12 @@ class VideoJob:
     # endpoint when it's detected automatically, and the suggested start point
     # when the endpoints have to be clicked.
     subject_start: Optional[Point] = None
+    # The finish point from the ArUco marker in the first frame (reference-frame
+    # pixels), or None if there wasn't exactly one marker.
+    aruco_finish: Optional[Point] = None
+    # Where the analysis came from: backend, model, device and library versions
+    # (see analysis_file.py).
+    analysis_meta: dict = field(default_factory=dict)
 
     # Rope endpoints, in reference-frame pixels.
     far_ep: Optional[Point] = None

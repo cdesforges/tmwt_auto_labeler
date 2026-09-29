@@ -30,6 +30,32 @@ except ImportError:
 DEFAULT_MODEL_PATH = "body26"
 
 
+# Requested device (see set_device).
+_requested_device = "auto"
+
+
+def set_device(device):
+    """Run on "auto" (CUDA if available, else CPU), "cpu" or "cuda". MPS isn't supported."""
+    global _requested_device
+    _requested_device = device
+
+
+def _device():
+    if _requested_device != "auto":
+        return _requested_device
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
+
+
+def provenance():
+    """Device and library versions, for the analysis file."""
+    import mmpose
+    return {"device": _device(), "versions": {"mmpose": mmpose.__version__}}
+
+
 # Loaded MMPoseInferencer models, by model path/alias; see _load_inferencer.
 _INFERENCERS = {}
 
@@ -41,10 +67,10 @@ def _load_inferencer(model_path):
                           "    pip install openmim\n"
                           "    mim install mmpose mmdet")
     if model_path not in _INFERENCERS:
-        # Force CPU: mmcv's compiled ops (nms, etc.) have no MPS implementation
+        # Never MPS: mmcv's compiled ops (nms, etc.) have no MPS implementation
         # on Apple Silicon, and using MPS crashes with
         # "nms_impl: implementation for device mps:0 not found."
-        _INFERENCERS[model_path] = MMPoseInferencer(pose2d=model_path, device="cpu")
+        _INFERENCERS[model_path] = MMPoseInferencer(pose2d=model_path, device=_device())
     return _INFERENCERS[model_path]
 
 

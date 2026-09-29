@@ -69,13 +69,13 @@ def _row(job):
     }
 
 
-def write_report(jobs, output_dir, backend_name):
+def write_report(jobs, output_dir, pose_models):
     """Write the CSV and Markdown reports and print a summary. Returns (csv_path, md_path)."""
     rows = [_row(job) for job in jobs]
     csv_path = os.path.join(output_dir, "labeling_report.csv")
     md_path = os.path.join(output_dir, "labeling_report.md")
     _write_csv(csv_path, rows)
-    _write_markdown(md_path, rows, backend_name)
+    _write_markdown(md_path, rows, pose_models)
     _print_summary(rows, csv_path, md_path)
     return csv_path, md_path
 
@@ -87,13 +87,13 @@ def _write_csv(path, rows):
         writer.writerows(rows)
 
 
-def _write_markdown(path, rows, backend_name):
+def _write_markdown(path, rows, pose_models):
     counts = {result: sum(r["result"] == result for r in rows) for result in RESULTS}
     lines = [
         "# TMWT labeling report",
         "",
         f"- Run: {datetime.now():%Y-%m-%d %H:%M}",
-        f"- Backend: {backend_name}",
+        f"- Pose model: {pose_models}",
         f"- Course length: {COURSE_M:g} m",
         f"- Videos: {len(rows)}",
     ]

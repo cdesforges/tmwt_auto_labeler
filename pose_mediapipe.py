@@ -14,6 +14,15 @@ from pose_common import NUM_LANDMARKS
 # Default model path (relative to the project root).
 DEFAULT_MODEL_PATH = "models/pose_landmarker_full.task"
 
+def set_device(device):
+    """MediaPipe's Python pose landmarker runs on the CPU; the device is ignored."""
+
+
+def provenance():
+    """Device and library versions, for the analysis file."""
+    return {"device": "cpu", "versions": {"mediapipe": mp.__version__}}
+
+
 # Confidence thresholds passed to the landmarker.
 _MIN_CONFIDENCE = 0.5
 

@@ -96,8 +96,11 @@ HEADER_H = 84         # instruction strip above the frame when picking endpoints
 _BTN_GAP = 16
 _BTN_MIN_W = 150
 
-# Review outcomes shown in the sidebar (LabelerUI.mark_reviewed).
+# Review outcomes shown in the sidebar (LabelerUI.mark_reviewed): approved but
+# not yet saved (grey check), approved and saved to disk (green check), skipped
+# (red cross).
 APPROVED_MARK = "approved"
+SAVED_MARK = "saved"
 REJECTED_MARK = "rejected"
 # Width kept free at the right of a reviewed row for its mark.
 _MARK_W = 26
@@ -162,11 +165,12 @@ def _dim(color):
 
 
 def _draw_mark(img, outcome, center):
-    """A green check (approved) or a red cross (rejected) centred at `center`."""
+    """A check (grey: approved, green: saved) or a red cross (rejected) centred at `center`."""
     x, y = center
-    if outcome == APPROVED_MARK:
+    if outcome in (APPROVED_MARK, SAVED_MARK):
+        color = GREEN if outcome == SAVED_MARK else GREY
         cv2.polylines(img, [np.array([(x - 7, y), (x - 2, y + 5), (x + 8, y - 6)], np.int32)],
-                      False, GREEN, 2, cv2.LINE_AA)
+                      False, color, 2, cv2.LINE_AA)
     else:
         cv2.line(img, (x - 6, y - 6), (x + 6, y + 6), RED, 2, cv2.LINE_AA)
         cv2.line(img, (x - 6, y + 6), (x + 6, y - 6), RED, 2, cv2.LINE_AA)
@@ -303,7 +307,7 @@ class LabelerUI:
         self.notes[i] = note
 
     def mark_reviewed(self, i, outcome):
-        """Record file i's review outcome (APPROVED_MARK / REJECTED_MARK); it moves to "Reviewed"."""
+        """Record file i's review outcome (APPROVED_MARK / SAVED_MARK / REJECTED_MARK); it moves to "Reviewed"."""
         self.reviewed[i] = outcome
 
     def _display_rows(self):

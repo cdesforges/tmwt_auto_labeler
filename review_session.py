@@ -1,0 +1,207 @@
+"""
+The review session: load each video's analysis file and interpret it, then,
+with a window, let the user review the videos, save their outputs and write the
+report; without one, save the automatic results unreviewed.
+
+Used by review_videos.py (analysis files made elsewhere, e.g. on a cluster) and
+label.py (processing and review in one go).
+"""
+
+import os
+
+import analysis
+import analysis_file
+import data_export
+import report
+import review
+from job import (REVIEW_APPROVED, REVIEW_REJECTED, REVIEW_UNREVIEWED, STATUS_FAILED,
+                 STATUS_INCOMPLETE, STATUS_NEEDS_INPUT, STATUS_NO_BODY, STATUS_OK,
+                 VideoJob)
+from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ENTER, KEY_ESC, NEEDS_INPUT,
+                        ORANGE, RED, SAVED_MARK, UNREVIEWED, WHITE, WORKING, JumpTo)
+
+
+def make_jobs(videos, output_dir, endpoint_behavior):
+    """One VideoJob per video, with its CSV output path in `output_dir`."""
+    return [VideoJob(path=v,
+                     output_path=os.path.join(output_dir, os.path.splitext(os.path.basename(v))[0] + ".csv"),
+                     name=os.path.basename(v),
+                     endpoint_behavior=endpoint_behavior)
+            for v in videos]
+
+
+def load_jobs(jobs, ui=None):
+    """
+    Load every job's analysis file and interpret it (subject, endpoints,
+    timing). A missing or unusable file marks the job failed with the reason.
+    """
+    for i, job in enumerate(jobs):
+        print(f"\n{'=' * 60}\nLoading ({i + 1}/{len(jobs)}): {job.name}\n{'=' * 60}")
+        if ui is not None:
+            ui.active = i
+            ui.show_progress("Loading analysis", f"{job.name} ({i + 1} of {len(jobs)})",
+                             i / len(jobs), force=True)
+        try:
+            analysis_file.load(job)
+            analysis.interpret(job)
+        except analysis_file.AnalysisFileError as e:
+            job.status, job.error = STATUS_FAILED, str(e)
+            print(f"  {e}")
+        if ui is not None:
+            ui.set_state(i, *_analysis_state(job))
+
+
+def run(jobs, ui, output_dir, review_first=True):
+    """
+    Review (if there's a window and review_first), save the outputs and write
+    the report; with a window, finish on a summary screen.
+    """
+    if ui is not None and review_first:
+        first = ask_to_review(ui, jobs)
+        if first is not None:
+            run_review(jobs, ui, first)
+    save_outputs(jobs, ui)
+    report_path, _ = report.write_report(jobs, output_dir, _pose_models(jobs))
+    if ui is not None:
+        show_summary(ui, jobs, report_path)
+
+
+def _pose_models(jobs):
+    """The pose model(s) the analysis files were made with, for the report."""
+    models = sorted({f"{m['backend']}: {m['model']} ({m.get('device', '?')})"
+                     for m in (job.analysis_meta for job in jobs) if m.get("backend")})
+    return ", ".join(models) or "unknown"
+
+
+def _analysis_state(job):
+    """(sidebar state, note) for a job after analysis."""
+    if job.status == STATUS_OK:
+        return DONE, f"auto  {job.duration:.2f}s"
+    if job.status == STATUS_NEEDS_INPUT:
+        what = "finish point" if job.subject_start is not None else "endpoints"
+        return NEEDS_INPUT, f"needs {what}: {job.endpoint_problem}"
+    if job.status == STATUS_INCOMPLETE:
+        return FAILED, review.summary_lines(job)[1]
+    return FAILED, job.error
+
+
+def reviewable(jobs):
+    """Indices of the jobs that can be reviewed (analysis didn't fail outright)."""
+    return [i for i, job in enumerate(jobs) if job.status != STATUS_FAILED]
+
+
+def next_unreviewed(jobs, after):
+    """
+    The next reviewable job after index `after` that hasn't been approved or
+    rejected yet, wrapping round to the start; None when every one is decided.
+    """
+    pending = [i for i in reviewable(jobs) if jobs[i].review == REVIEW_UNREVIEWED]
+    later = [i for i in pending if i > after]
+    return (later or pending or [None])[0]
+
+
+def ask_to_review(ui, jobs):
+    """
+    "Analysis complete" screen with what was found.
+
+    Returns:
+        The index of the job to start reviewing — the first one, or whichever
+        the user clicked in the sidebar — or None to save everything without
+        reviewing.
+    """
+    ui.active = None
+    counts = [
+        (sum(j.status == STATUS_OK for j in jobs), "timed automatically", GREEN),
+        (sum(j.status == STATUS_NEEDS_INPUT for j in jobs), "need the finish point clicked", ORANGE),
+        (sum(j.status == STATUS_INCOMPLETE for j in jobs), "with incomplete timing", RED),
+        (sum(j.status == STATUS_NO_BODY for j in jobs), "with no body detected", RED),
+        (sum(j.status == STATUS_FAILED for j in jobs), "failed", RED),
+    ]
+    lines = [("Analysis complete", GREEN), (f"{len(jobs)} video(s) analysed", WHITE)]
+    lines += [(f"{count} {text}", color) for count, text, color in counts if count]
+    lines += [("Or click a video in the list to start reviewing there.", GREY)]
+    ui.review_targets = set(reviewable(jobs))
+    try:
+        choice = ui.show_message(lines, [("Start review", "review", KEY_ENTER),
+                                         ("Save all without reviewing", "skip", (KEY_ESC,))])
+    except JumpTo as jump:
+        return jump.index
+    finally:
+        ui.review_targets = set()
+    return next_unreviewed(jobs, -1) if choice == "review" else None
+
+
+def run_review(jobs, ui, first):
+    """
+    Review jobs, starting with index `first`, until every reviewable job has
+    been approved or rejected, or the user quits.
+
+    After each decision the next unreviewed job follows (wrapping round to
+    earlier ones that were skipped); jobs already decided are never revisited
+    automatically. Clicking a file in the sidebar at any point leaves the
+    current review undecided and switches to that file — including one already
+    reviewed, whose result the new review replaces.
+    """
+    ui.review_targets = set(reviewable(jobs))
+    current = first
+    try:
+        while current is not None:
+            job = jobs[current]
+            state_before = (ui.states[current], ui.notes[current])
+            # A video already approved or skipped opens at the options, not a replay.
+            at_menu = job.review != REVIEW_UNREVIEWED
+            try:
+                if review.review_job(job, ui, current, start_at_menu=at_menu) == review.QUIT:
+                    print("  Review stopped by user.")
+                    return
+            except JumpTo as jump:
+                ui.set_state(current, *state_before)   # left undecided (or as before)
+                print(f"  Switching to {jobs[jump.index].name}")
+                current = jump.index
+                continue
+            current = next_unreviewed(jobs, current)
+    finally:
+        ui.review_targets = set()
+
+
+def save_outputs(jobs, ui):
+    """
+    Phase 3: write the outputs of every job that has endpoints and wasn't
+    rejected — approved ones and, if review was skipped or stopped early, the
+    automatic results of the rest (marked unreviewed).
+    """
+    to_save = [(i, job) for i, job in enumerate(jobs)
+               if job.frames and job.review != REVIEW_REJECTED
+               and (job.far_ep is not None or job.review == REVIEW_APPROVED)]
+    for k, (i, job) in enumerate(to_save):
+        approved = job.review == REVIEW_APPROVED
+        print(f"\n  Saving ({k + 1}/{len(to_save)}): {job.name}"
+              + ("" if approved else " (not reviewed)"))
+        if ui is None:
+            data_export.save_job(job)
+            continue
+        ui.active = i
+        note = ui.notes[i]
+        ui.set_state(i, WORKING, "saving...")
+        data_export.save_job(job, on_progress=lambda frac: ui.show_progress(
+            f"Saving {job.name}", f"{k + 1} of {len(to_save)}", frac))
+        if approved:
+            ui.set_state(i, DONE, note)
+            ui.mark_reviewed(i, SAVED_MARK)   # the check turns green once it's on disk
+        else:
+            ui.set_state(i, UNREVIEWED, "saved (not reviewed)")
+
+
+def show_summary(ui, jobs, report_path):
+    """Final screen: result counts and where the report is."""
+    counts = {}
+    for job in jobs:
+        result = report.job_result(job)[0]
+        counts[result] = counts.get(result, 0) + 1
+    ui.active = None
+    ui.show_message(
+        [("All done", GREEN)]
+        + [(f"{result}: {count}", RED if result in (report.REJECTED, report.FAILED) else WHITE)
+           for result, count in counts.items()]
+        + [(f"Report: {os.path.basename(report_path)} in the output folder", GREY)],
+        [("Close", "close", KEY_ENTER + (KEY_ESC,))])

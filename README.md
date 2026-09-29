@@ -11,83 +11,145 @@ skeleton-only playback for review.
 
 ---
 
+## Workflow
+
+Labeling has two steps, which can run on different machines:
+
+1. **Process** — `process_videos.py`: pose estimation and camera tracking for every
+   video, with no window. This is the slow part (about 1.4× the video's length
+   per video with rtmlib on Apple Silicon), so it can run on a cluster. Each
+   video's results are written to `<videos folder>/tmwt_analysis/<video>.npz`
+   (coordinates only, no images; about 100 KB per video).
+2. **Review** — `review_videos.py`: run locally on the same folder (copy the
+   videos and the `tmwt_analysis/` folder back). It works out the subject,
+   endpoints and timing in seconds, opens the review window, and writes the
+   outputs and the report. It needs no pose model.
+
+`label.py` does both in one go locally, processing only videos that aren't
+processed yet, so running it again on a folder goes straight to review.
+
+```bash
+# On the cluster (or any machine)
+python process_videos.py --input_dir /data/session1
+
+# Locally, with the videos and tmwt_analysis/ copied back
+python review_videos.py --input_dir media/session1
+
+# Or both at once, locally
+python label.py --input_dir media/session1
+```
+
+Things to know:
+
+- **Same videos.** Review checks each video against a fingerprint saved at
+  processing, and refuses a video that differs ("re-process it"). The folder's
+  path can differ between machines.
+- **Resuming.** `process_videos.py` skips videos that already have an analysis
+  file made with the same backend, model and matte setting, so an interrupted
+  run can be restarted. `--reprocess` forces everything to run again.
+- **Same OpenCV version.** Review re-reads frames and must see the same frames as
+  processing did, so use the same OpenCV version on both machines.
+- **Cluster results vs. local.** A GPU or CPU gives very slightly different
+  numbers from CoreML on a Mac, which can shift timings a little. Worth one
+  check on a few videos processed both ways.
+- **No internet on compute nodes?** Run `python process_videos.py --download_models`
+  once on a node that has internet. rtmlib caches models in `$TORCH_HOME/hub`, else
+  `$XDG_CACHE_HOME/rtmlib/hub`, else `~/.cache/rtmlib/hub`; point these at a shared
+  folder if home directories aren't shared.
+
+An example SLURM job for one folder:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=tmwt
+#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=8G
+##SBATCH --gres=gpu:1          # uncomment for a GPU node (with onnxruntime-gpu)
+source ~/tmwt/.venv/bin/activate
+cd ~/tmwt
+python process_videos.py --input_dir /data/session1 --device auto
+```
+
+---
+
 ## Installation
+
+Locally (processing and review):
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install rtmlib onnxruntime        # the default pose backend
 ```
 
-The labeler's window uses [pygame](https://www.pygame.org), installed by
-`requirements.txt`. OpenCV's own windows aren't used for it: on macOS they
-report mouse clicks in the wrong place. The window runs in its own small
-process, because OpenCV and pygame bundle different versions of SDL2 that
-conflict when loaded together. The window can be resized freely; the picture
-scales to fit and clicks stay accurate.
+On a cluster (processing only; no window, so OpenCV's headless build):
 
-### Optional pose backends
+```bash
+pip install -r requirements-cluster.txt
+```
 
-The default backend is MediaPipe and is installed by `requirements.txt`. Two
-alternative backends are supported:
+The review window uses [pygame](https://www.pygame.org), installed by
+`requirements.txt`. OpenCV's own windows aren't used: on macOS they report mouse
+clicks in the wrong place. The window runs in its own small process, because
+OpenCV and pygame bundle different versions of SDL2 that conflict when loaded
+together. It can be resized freely; the picture scales to fit and clicks stay
+accurate.
+
+### Pose backends
 
 | Backend    | Install                                                                                     | Notes                                                                                                          |
 |------------|---------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| `mediapipe`| _(default, already installed)_                                                              | Fastest, lightest. Best for well-lit, close-range footage.                                                     |
-| `rtmlib`   | `pip install rtmlib onnxruntime`                                                            | RTMPose "body with feet" (Halpe-26) via ONNX Runtime: body plus big toe, small toe and heel per foot. Uses CoreML on Apple Silicon by default. Best accuracy at distance; clean install. |
-| `mmpose`   | `pip install openmim mmengine` then `MMCV_WITH_OPS=1 FORCE_CUDA=0 pip install --no-build-isolation "mmcv>=2.0.1,<2.2.0" && pip install mmpose mmdet` | Same RTMPose weights as `rtmlib`. Heavier install; CPU-only on Apple Silicon (no MPS ops in mmcv). |
+| `rtmlib` (default) | `pip install rtmlib onnxruntime` (`onnxruntime-gpu` for NVIDIA GPUs)             | RTMPose "body with feet" (Halpe-26) via ONNX Runtime: body plus big toe, small toe and heel per foot. CoreML on Apple Silicon, CUDA on NVIDIA GPUs, else CPU. Best accuracy at distance. |
+| `mediapipe`| installed by `requirements.txt`                                                             | Fastest, lightest; CPU only. Heel and big toe, no small toe. Best for well-lit, close-range footage.            |
+| `mmpose`   | `pip install openmim mmengine` then `MMCV_WITH_OPS=1 FORCE_CUDA=0 pip install --no-build-isolation "mmcv>=2.0.1,<2.2.0" && pip install mmpose mmdet` | Same RTMPose weights as `rtmlib` (`body26`). Heavier install; CPU or CUDA (no MPS ops in mmcv). |
 
 ---
 
 ## Usage
 
-```bash
-python label.py --input_dir <videos_dir> [options]
-```
+### `process_videos.py`
 
-### Flags
+| Flag                | Default              | Description |
+|---------------------|----------------------|-------------|
+| `--input_dir`       | _required_           | Folder of videos (`.mp4`, `.mov`, `.avi`, `.mkv`, `.wmv`, `.m4v`). Analysis files go in its `tmwt_analysis/` subfolder. |
+| `--backend`         | `rtmlib`             | Pose backend: `rtmlib`, `mediapipe` or `mmpose`. |
+| `--model`           | _(backend-specific)_ | Pose model (see below). |
+| `--device`          | `auto`               | `auto` (CUDA if available, else CoreML on Apple Silicon, else CPU), `cpu`, `cuda` or `mps`. |
+| `--no_matte_crop`   | _off_                | Don't crop solid-colour mattes (letterbox / pillarbox bars). |
+| `--reprocess`       | _off_                | Process every video, even ones already processed. |
+| `--download_models` | _off_                | Only download / load the pose model, then exit. |
 
-| Flag           | Required | Default                                | Description                                                                                                              |
-|----------------|----------|----------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `--input_dir`  | ✓        | —                                      | Directory containing video files to process. Supported extensions: `.mp4`, `.mov`, `.avi`, `.mkv`, `.wmv`, `.m4v`.        |
-| `--output_dir` |          | `<input_dir>/output`                   | Directory to write output CSVs and videos.                                                                               |
-| `--backend`    |          | `mediapipe`                            | Pose backend. One of `mediapipe`, `mmpose`, `rtmlib`.                                                                    |
-| `--model`      |          | _(backend-specific)_                   | Pose model. Interpretation depends on the backend (see below).                                                           |
-| `--no_matte_crop` |       | _off (cropping enabled)_               | Disable automatic cropping of solid-color mattes (letterbox / pillarbox bars) around the active picture.                 |
-| `--endpoint_behavior` |  | `first_foot`                          | What counts as crossing the start line (when one is clicked) and the finish line: the first toe to cross, big or small, on either foot (`first_foot`), or the midpoint of the two ankles (`ankle_midpoint`). |
-| `--no_display` |          | _off (window + review enabled)_        | Run unattended: no window and no review. Automatic results are saved unreviewed; videos needing manual endpoints are reported as failed. |
+### `review_videos.py`
+
+| Flag                  | Default              | Description |
+|-----------------------|----------------------|-------------|
+| `--input_dir`         | _required_           | Folder of videos with its `tmwt_analysis/` subfolder. |
+| `--output_dir`        | `<input_dir>/output` | Where to write the CSVs, timing files, videos and report. |
+| `--endpoint_behavior` | `first_foot`         | What counts as crossing the start line (when one is clicked) and the finish line: the first toe to cross, big or small, on either foot (`first_foot`), or the midpoint of the two ankles (`ankle_midpoint`). |
+| `--no_display`        | _off_                | No window and no review: save the automatic results unreviewed. |
+
+### `label.py`
+
+Takes all the flags of both scripts (`--input_dir`, `--output_dir`, `--backend`,
+`--model`, `--device`, `--no_matte_crop`, `--reprocess`, `--endpoint_behavior`,
+`--no_display`).
 
 #### `--model` values by backend
 
 | Backend    | Value type              | Default                              | Examples                                          |
 |------------|-------------------------|--------------------------------------|---------------------------------------------------|
-| `mediapipe`| Path to a `.task` file  | `models/pose_landmarker_full.task`   | `models/pose_landmarker_heavy.task`               |
-| `mmpose`   | Alias or config path    | `human`                              | `human`, `wholebody`, `/path/to/config.py`        |
 | `rtmlib`   | Mode name               | `balanced`                           | `balanced`, `performance`, `lightweight`          |
+| `mediapipe`| Path to a `.task` file  | `models/pose_landmarker_full.task`   | `models/pose_landmarker_heavy.task`               |
+| `mmpose`   | Alias or config path    | `body26`                             | `body26`, `/path/to/config.py`                    |
 
 #### Environment variables
 
-| Variable         | Applies to  | Description                                                                                                       |
-|------------------|-------------|-------------------------------------------------------------------------------------------------------------------|
-| `RTMLIB_DEVICE`  | `rtmlib`    | Override the ONNX Runtime device. Auto-picks `mps` on Apple Silicon, else `cpu`. Set to `cpu` to force CPU.       |
-
----
-
-## Examples
-
-```bash
-# Default: MediaPipe on all videos in a directory
-python label.py --input_dir media/session1 --output_dir results/session1
-
-# RTMLib backend (recommended for distant subjects on Apple Silicon)
-python label.py --input_dir media/session1 --backend rtmlib
-
-# RTMLib with the highest-accuracy model
-python label.py --input_dir media/session1 --backend rtmlib --model performance
-
-# Force CPU on rtmlib (troubleshooting CoreML issues)
-RTMLIB_DEVICE=cpu python label.py --input_dir media/session1 --backend rtmlib
-```
+| Variable         | Applies to  | Description |
+|------------------|-------------|-------------|
+| `RTMLIB_DEVICE`  | `rtmlib`    | Overrides `--device` for rtmlib. |
+| `TORCH_HOME` / `XDG_CACHE_HOME` | `rtmlib` | Where rtmlib caches downloaded models. |
 
 ---
 
@@ -111,8 +173,9 @@ matte cropping existed. Pass `--no_content_crop` to see the full recorded frame.
 
 ## How a run works
 
-A run processes every video in `--input_dir` in four phases, all in one
-resizable window.
+A `label.py` run processes every video in `--input_dir` in four phases, all in
+one resizable window. (`review_videos.py` starts at the review, loading the
+analysis files instead of analysing.)
 Every choice is an on-screen button: a click counts when the mouse is released
 over the same button it was pressed on. Most buttons also have a keyboard
 shortcut, shown on the button. The right-hand sidebar lists every file (scroll
@@ -282,12 +345,17 @@ Playback controls:
 ## Repository layout
 
 ```
-label.py             # Entry point: CLI and the analyse -> review -> report batch driver
+process_videos.py    # Step 1 (e.g. on a cluster): processing, writes tmwt_analysis/*.npz
+review_videos.py     # Step 2 (locally): review from the analysis files
+label.py             # Both steps in one go, locally
+processing.py        # Processing a folder: skip / process / save analysis files
+analysis_file.py     # The analysis file format: save, load, video fingerprint
+review_session.py    # Loading, reviewing, saving and reporting a folder
 job.py               # Data model: VideoJob (one per video) and FrameResult (one per frame)
 video_io.py          # Opening videos: first content frame, matte crop, playback clock
 matte.py             # Letterbox / pillarbox detection and the cropping capture wrapper
 endpoints.py         # Finish line from the ArUco marker
-analysis.py          # Phase 1: pose + ground tracking over every frame
+analysis.py          # Slow part (pose + tracking per frame) and fast part (subject, endpoints, timing)
 tracking.py          # Ground-plane optical-flow tracker (camera drift)
 metric.py            # Geometry: t_along and perspective-correct distance along the course
 onset.py             # Hindsight walk-start detection on distance signals

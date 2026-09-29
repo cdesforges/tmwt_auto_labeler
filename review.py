@@ -41,9 +41,11 @@ _SKIP = "skip"            # the user chose to skip the file
 _SHOWN_HISTORY = 300
 
 
-def review_job(job, ui, i):
+def review_job(job, ui, i, start_at_menu=False):
     """
-    Review one analysed job (index i in the batch) in the window.
+    Review one analysed job (index i in the batch) in the window. With
+    start_at_menu (a video already reviewed), open at the options instead of
+    replaying it first.
 
     Returns:
         QUIT if the user asked to stop reviewing, else None.
@@ -75,6 +77,8 @@ def review_job(job, ui, i):
 
     several_people = people.people_on_screen(job)[0] is not None
     last_frame = job.info.first_frame
+    if start_at_menu:
+        replay = False
     while True:
         if replay:
             _, _, frame = playback(job, ui)

@@ -1,11 +1,15 @@
 """
-Phase 1 of a run: analyse one video without any user input.
+Phase 1 of a run: analyse one video without any user input, in two parts.
 
-For each frame this records every person's pose and the camera-drift homography
-(job.FrameResult). People are then linked into tracks and the walking subject is
-chosen (people.py). None of that depends on the rope endpoints, and every
-person's poses are kept, so changing the endpoints or the subject later only
-recomputes the timing — pose estimation never runs twice.
+process_video is the slow part: every person's pose and the camera-drift
+homography in every frame (job.FrameResult), plus the ArUco finish marker. It
+can run on a cluster (process_videos.py); its results are saved to an analysis
+file (analysis_file.py).
+
+interpret is the fast part, run wherever the review happens: people are linked
+into tracks, the walking subject is chosen (people.py), the endpoints are set
+and the timing decided (timing.py). Every person's poses are kept, so changing
+the endpoints, the subject or the timing rules never re-runs pose estimation.
 """
 
 import cv2
@@ -19,14 +23,14 @@ from job import (FrameResult, STATUS_FAILED, STATUS_INCOMPLETE,
 from tracking import GroundTracker
 
 
-def analyze_job(job, model_path, backend, matte_crop=True, on_progress=None):
+def process_video(job, model_path, backend, matte_crop=True, on_progress=None):
     """
-    Analyse one video: first frame and matte crop, every person's pose and the
-    camera drift over every frame, the subject, the rope endpoints, and the
-    automatic walk timing.
+    The slow part of the analysis, with no user input: probe the video (first
+    frame, matte crop), detect the ArUco finish marker, and run pose estimation
+    (everyone in frame) and camera-drift tracking over every frame.
 
-    Sets job.status to one of STATUS_OK / STATUS_INCOMPLETE / STATUS_NEEDS_INPUT
-    / STATUS_NO_BODY / STATUS_FAILED (the last two with job.error).
+    Fills job.info, job.frames and job.aruco_finish. On failure sets
+    job.status = STATUS_FAILED with job.error.
 
     Args:
         job: the VideoJob to fill in.
@@ -46,12 +50,24 @@ def analyze_job(job, model_path, backend, matte_crop=True, on_progress=None):
         job.status, job.error = STATUS_FAILED, str(e)
         return
 
+    job.aruco_finish = endpoints.detect_near_endpoint(job.info.first_frame)
     landmarker = backend.create_landmarker(model_path, num_poses=people.MAX_PEOPLE)
     try:
         job.frames = track_frames(job, tracker, landmarker, backend, on_progress)
     finally:
         landmarker.close()
 
+
+def interpret(job):
+    """
+    The fast part (seconds), from the per-frame results: follow people and
+    choose the subject, set the endpoints, and decide the walk timing.
+
+    Sets job.status to STATUS_OK / STATUS_INCOMPLETE / STATUS_NEEDS_INPUT /
+    STATUS_NO_BODY (unless processing already failed).
+    """
+    if job.status == STATUS_FAILED:
+        return
     shape = job.info.first_frame.shape
     job.tracks = people.build_tracks(job.frames, shape, job.info.fps)
     subject = people.choose_subject(job.tracks, job.frames, shape)
@@ -65,15 +81,14 @@ def analyze_job(job, model_path, backend, matte_crop=True, on_progress=None):
         print(f"  {n} people tracked; subject grew {subject.growth:.1f}x in apparent "
               f"size (walking toward the camera)")
 
-    near_ep = endpoints.detect_near_endpoint(job.info.first_frame)
-    problem = ("no ArUco marker" if near_ep is None
+    problem = ("no ArUco marker" if job.aruco_finish is None
                else "subject never fully located" if job.subject_start is None else "")
     if problem:
         job.status, job.endpoint_problem = STATUS_NEEDS_INPUT, problem
         print(f"  Rope endpoints need clicking at review: {problem}")
         return
 
-    job.far_ep, job.near_ep = job.subject_start, near_ep
+    job.far_ep, job.near_ep = job.subject_start, job.aruco_finish
     job.endpoint_source = "auto"
     job.far_ep_is_standing_spot = True
     timing.update_timing(job)

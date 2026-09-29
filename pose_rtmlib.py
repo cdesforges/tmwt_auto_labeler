@@ -13,8 +13,11 @@ Install:
 Notes:
     - `model_path` selects rtmlib's Body mode: "balanced" (default),
       "performance" (larger, more accurate), or "lightweight" (smaller, faster).
-    - Device defaults to 'mps' on Apple Silicon, else 'cpu'. Override with the
-      RTMLIB_DEVICE environment variable.
+    - Device (set_device): "auto" picks 'cuda' when ONNX Runtime has CUDA,
+      'mps' (CoreML) on Apple Silicon, else 'cpu'. The RTMLIB_DEVICE
+      environment variable overrides it.
+    - Models are downloaded on first use into $TORCH_HOME/hub, else
+      $XDG_CACHE_HOME/rtmlib/hub, else ~/.cache/rtmlib/hub.
     - rtmlib has no streaming mode, so both landmarker factories are the same and
       detect_poses ignores its timestamp.
     - Loading a model takes several seconds (CoreML compiles it), and the models
@@ -50,14 +53,36 @@ DEFAULT_MODEL_PATH = "balanced"
 _MODES = ("balanced", "performance", "lightweight")
 
 
-def _default_device():
-    """RTMLIB_DEVICE if set, else 'mps' on Apple Silicon, else 'cpu'."""
+# Requested device (see set_device).
+_requested_device = "auto"
+
+
+def set_device(device):
+    """Run on "auto", "cpu", "cuda" or "mps" (CoreML); see _device."""
+    global _requested_device
+    _requested_device = device
+
+
+def _device():
+    """The device to run on: RTMLIB_DEVICE, else the requested one, else detected."""
     override = os.environ.get("RTMLIB_DEVICE")
     if override:
         return override
+    if _requested_device != "auto":
+        return _requested_device
+    if Body is not None and "CUDAExecutionProvider" in onnxruntime.get_available_providers():
+        return "cuda"
     if platform.system() == "Darwin" and platform.machine() == "arm64":
         return "mps"
     return "cpu"
+
+
+def provenance():
+    """Device and library versions, for the analysis file."""
+    import rtmlib
+    return {"device": _device(),
+            "versions": {"rtmlib": getattr(rtmlib, "__version__", "?"),
+                         "onnxruntime": onnxruntime.__version__}}
 
 
 # Loaded rtmlib.BodyWithFeet models, by (mode, device); see _load_body.
@@ -71,7 +96,7 @@ def _load_body(mode):
                           "    pip install rtmlib onnxruntime")
     if mode not in _MODES:
         raise ValueError(f"Invalid rtmlib mode: {mode!r}. Use one of {_MODES}.")
-    key = (mode, _default_device())
+    key = (mode, _device())
     if key not in _BODIES:
         _BODIES[key] = Body(mode=mode, backend="onnxruntime", device=key[1])
     return _BODIES[key]
