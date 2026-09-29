@@ -20,7 +20,7 @@ import analysis_file
 import people
 import pose_common
 from job import STATUS_FAILED, VideoJob
-from labeler_ui import DONE, FAILED, WORKING
+from labeler_ui import DONE, FAILED, WORKING, WindowClosed
 
 # Video file extensions to look for.
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v"}
@@ -126,6 +126,8 @@ def process_all(videos, backend, backend_name, model_path, matte_crop=True,
                 if ui is not None:
                     ui.set_state(k, FAILED, "not processed (cancelled)")
             return True
+        except WindowClosed:
+            raise
         except Exception as e:
             traceback.print_exc()
             job.status, job.error = STATUS_FAILED, f"error: {e}"

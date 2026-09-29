@@ -14,11 +14,13 @@ import analysis_file
 import data_export
 import report
 import review
+import review_progress
 from job import (REVIEW_APPROVED, REVIEW_REJECTED, REVIEW_UNREVIEWED, STATUS_FAILED,
                  STATUS_INCOMPLETE, STATUS_NEEDS_INPUT, STATUS_NO_BODY, STATUS_OK,
                  VideoJob)
 from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ENTER, KEY_ESC, NEEDS_INPUT,
-                        ORANGE, RED, SAVED_MARK, UNREVIEWED, WHITE, WORKING, JumpTo)
+                        ORANGE, RED, SAVED_MARK, UNREVIEWED, WHITE, WORKING, APPROVED_MARK,
+                        REJECTED_MARK, JumpTo, WindowClosed)
 
 
 def make_jobs(videos, output_dir, endpoint_behavior):
@@ -54,21 +56,85 @@ def load_jobs(jobs, ui=None):
 def run(jobs, ui, output_dir, review_first=True):
     """
     Review (if there's a window and review_first), save the outputs and write
-    the report; with a window, finish on a summary screen. After a review, the
-    user confirms saving first (and can exit without saving).
+    the report; with a window, finish on a summary screen.
+
+    With a window, an unfinished earlier review of the folder can be continued
+    (review_progress.py). After reviewing, the user confirms saving first; exiting
+    without saving, or closing the window, keeps the review progress for next
+    time.
+
+    Raises:
+        WindowClosed: the user closed the window (progress is saved first).
     """
     if ui is not None and review_first:
-        first = ask_to_review(ui, jobs)
-        if first is not None:
-            run_review(jobs, ui, first)
-            if not confirm_save(jobs, ui):
-                print("\nExited without saving. The analysis files are kept, so the "
-                      "videos can be reviewed again without re-processing.")
+        try:
+            if not _review(jobs, ui):
+                print("\nExited without saving. Your review progress is kept: run the "
+                      "review again to continue where you left off, or start over.")
                 return
+        except WindowClosed:
+            review_progress.save(jobs, ui.active)
+            print("\nWindow closed. Your review progress is kept: run the review "
+                  "again to continue where you left off, or start over.")
+            raise
     save_outputs(jobs, ui)
+    if ui is not None:
+        review_progress.clear(jobs)
     report_path, _ = report.write_report(jobs, output_dir, _pose_models(jobs))
     if ui is not None:
         show_summary(ui, jobs, report_path)
+
+
+def _review(jobs, ui):
+    """
+    The interactive part: continue or start the review, review, then confirm.
+    Returns True to save the outputs.
+    """
+    progress = review_progress.load(jobs)
+    if progress is not None and ask_resume(ui, progress):
+        last = review_progress.restore(jobs, progress)
+        _show_restored_states(jobs, ui)
+        # Pick up the video that was open when the review stopped, if it's still
+        # undecided; otherwise the next one to review.
+        if last is not None and jobs[last].review == REVIEW_UNREVIEWED:
+            first = last
+        else:
+            first = next_unreviewed(jobs, last if last is not None else -1)
+        print(f"  Continuing the review saved {progress['saved']}.")
+    else:
+        review_progress.clear(jobs)
+        first = ask_to_review(ui, jobs)
+        if first is None:
+            return True   # "Save all without reviewing"
+    if first is not None:
+        run_review(jobs, ui, first)
+    return confirm_save(jobs, ui)
+
+
+def ask_resume(ui, progress):
+    """"Continue your previous review?" screen. Returns True to continue it."""
+    approved, skipped, todo = review_progress.counts(progress)
+    ui.active = None
+    choice = ui.show_message([
+        ("Continue your previous review?", WHITE),
+        (f"Saved {progress['saved'].replace('T', ' at ')}: {approved} approved, "
+         f"{skipped} skipped, {todo} still to review.", GREY),
+        ("Start over discards those decisions.", GREY),
+    ], [("Continue", "continue", KEY_ENTER + (KEY_ESC,)), ("Start over", "restart", ())])
+    return choice == "continue"
+
+
+def _show_restored_states(jobs, ui):
+    """Update the sidebar for decisions and edits restored from saved progress."""
+    for i, job in enumerate(jobs):
+        if job.review == REVIEW_APPROVED:
+            ui.set_state(i, DONE, f"approved  {job.duration:.2f}s")
+            ui.mark_reviewed(i, APPROVED_MARK)
+        elif job.review == REVIEW_REJECTED:
+            ui.set_state(i, FAILED, f"rejected: {job.review_note}")
+            ui.mark_reviewed(i, REJECTED_MARK)
+        elif job.status != STATUS_FAILED and job.duration is not None:
+            ui.set_state(i, DONE, f"{job.timing_source}  {job.duration:.2f}s")
 
 
 def _pose_models(jobs):
@@ -128,7 +194,7 @@ def ask_to_review(ui, jobs):
     ui.review_targets = set(reviewable(jobs))
     try:
         choice = ui.show_message(lines, [("Start review", "review", KEY_ENTER),
-                                         ("Save all without reviewing", "skip", (KEY_ESC,))])
+                                         ("Save all without reviewing", "skip", ())])
     except JumpTo as jump:
         return jump.index
     finally:
@@ -140,7 +206,7 @@ def confirm_save(jobs, ui):
     """
     "Review complete" screen: what will be saved, with Save results and Exit
     without saving. Clicking a video in the sidebar reviews just that video,
-    then returns here. Closing the window counts as Save.
+    then returns here. Exiting without saving keeps the review progress.
 
     Returns:
         True to save.
@@ -163,8 +229,8 @@ def confirm_save(jobs, ui):
         ui.active = None
         ui.review_targets = set(reviewable(jobs))
         try:
-            choice = ui.show_message(lines, [("Save results", "save", KEY_ENTER + (KEY_ESC,)),
-                                             ("Exit without saving", "exit", ())])
+            choice = ui.show_message(lines, [("Save results", "save", KEY_ENTER),
+                                             ("Exit without saving", "exit", (KEY_ESC,))])
         except JumpTo as jump:
             run_review(jobs, ui, jump.index, only_one=True)
             continue
@@ -196,14 +262,17 @@ def run_review(jobs, ui, first, only_one=False):
             # A video already approved or skipped opens at the options, not a replay.
             at_menu = job.review != REVIEW_UNREVIEWED
             try:
-                if review.review_job(job, ui, current, start_at_menu=at_menu) == review.QUIT:
-                    print("  Review stopped by user.")
-                    return
+                result = review.review_job(job, ui, current, start_at_menu=at_menu)
             except JumpTo as jump:
                 ui.set_state(current, *state_before)   # left undecided (or as before)
+                review_progress.save(jobs, current)
                 print(f"  Switching to {jobs[jump.index].name}")
                 current = jump.index
                 continue
+            review_progress.save(jobs, current)       # after every decision
+            if result == review.QUIT:
+                print("  Review stopped by user.")
+                return
             current = None if only_one else next_unreviewed(jobs, current)
     finally:
         ui.review_targets = set()

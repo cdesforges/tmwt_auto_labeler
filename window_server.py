@@ -140,6 +140,8 @@ def _test_event(spec, display):
     Test hook for the "post" command: a resize, or a mouse event at a canvas
     position (converted to window pixels, so the real mapping back is exercised).
     """
+    if spec["type"] == "quit":
+        return pygame.event.Event(pygame.QUIT)
     if spec["type"] == "wheel":
         display.pointer = display.to_window((spec["x"], spec["y"]))
         return pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=int(spec["dy"]),

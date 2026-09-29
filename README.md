@@ -215,10 +215,17 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
 3. **Save.** Once review is finished (or you quit it), a **Review complete**
    screen shows what will be saved. **Save results** writes the outputs of every
    video that wasn't skipped, in one go, with a progress bar; **Exit without
-   saving** writes nothing (the analysis files stay, so you can review again
-   without re-processing). Click a video in the sidebar to change it first; you
+   saving** writes nothing and keeps your review progress for next time (the
+   analysis files stay too, so there's no re-processing). Click a video in the sidebar to change it first; you
    come back to this screen afterwards. Nothing is written during review, so
    there's no wait between videos.
+   **Stopping part-way.** Review progress is saved as you go (after every
+   decision and whenever you switch video) to `tmwt_analysis/review_progress.json`.
+   If you close the window or exit without saving, the next review of the
+   folder asks whether to **Continue** where you left off (reopening the video
+   you were on) or **Start over**. The file is deleted once the outputs are
+   saved. Progress for a video that has since been replaced or re-processed is
+   ignored.
 4. **Report.** `labeling_report.csv` and `labeling_report.md` summarise every
    video (see [Output](#output)).
 
@@ -362,6 +369,7 @@ label.py             # Both steps in one go, locally
 processing.py        # Processing a folder: skip / process / save analysis files
 analysis_file.py     # The analysis file format: save, load, video fingerprint
 review_session.py    # Loading, reviewing, saving and reporting a folder
+review_progress.py   # Saving / restoring an unfinished review
 job.py               # Data model: VideoJob (one per video) and FrameResult (one per frame)
 video_io.py          # Opening videos: first content frame, matte crop, playback clock
 matte.py             # Letterbox / pillarbox detection and the cropping capture wrapper

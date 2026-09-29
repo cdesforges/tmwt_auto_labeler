@@ -33,7 +33,7 @@ import sys
 import processing
 import review_session
 from job import END_BEHAVIORS, END_FIRST_FOOT
-from labeler_ui import LabelerUI
+from labeler_ui import LabelerUI, WindowClosed
 from pose_backend import BACKENDS, DEVICES, get_backend
 
 
@@ -95,6 +95,9 @@ def main():
         jobs = review_session.make_jobs(videos, output_dir, args.endpoint_behavior)
         review_session.load_jobs(jobs, ui)
         review_session.run(jobs, ui, output_dir, review_first=not cancelled)
+    except WindowClosed:
+        print("Window closed; stopping. Processed videos keep their analysis files.")
+        return
     finally:
         if ui is not None:
             ui.close()

@@ -312,6 +312,10 @@ def _bar_buttons(specs):
     return button_row(specs, MAIN_H - BAR_H + (BAR_H - BTN_H) // 2)
 
 
+class WindowClosed(Exception):
+    """The user closed the window. Raised from any screen so the program can stop cleanly."""
+
+
 class JumpTo(Exception):
     """A file in the sidebar was clicked; `index` is which one."""
 
@@ -493,9 +497,16 @@ class LabelerUI:
     # --- Showing a screen and handling input -----------------------------------
 
     def _show(self, main, wait_ms):
-        """Display `main` + sidebar and wait up to wait_ms for a key (window.KEY_NONE if none)."""
+        """
+        Display `main` + sidebar and wait up to wait_ms for a key (window.KEY_NONE if none).
+
+        Raises:
+            WindowClosed: the user closed the window.
+        """
         self._window.show(np.hstack([main, self._sidebar()]))
         key = self._window.poll(wait_ms)
+        if self._window.closed:
+            raise WindowClosed()
         self._apply_scrolling()
         return key
 
@@ -592,7 +603,10 @@ class LabelerUI:
         buttons = button_row([("Cancel", "cancel", (KEY_ESC,))], MAIN_H - 90) if cancellable else []
         now = time.perf_counter()
         if not force and now - self._last_progress_draw < _PROGRESS_REDRAW_S:
-            value, _, _ = self._handle_input(buttons, self._window.poll(0))
+            key = self._window.poll(0)
+            if self._window.closed:
+                raise WindowClosed()
+            value, _, _ = self._handle_input(buttons, key)
             self._apply_scrolling()
             return value == "cancel"
         self._last_progress_draw = now

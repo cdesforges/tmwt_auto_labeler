@@ -34,7 +34,7 @@ import timing
 import video_io
 from job import COURSE_M
 from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ESC, KEY_SPACE, RED, UNREVIEWED,
-                        WAITING, WHITE, JumpTo, LabelerUI)
+                        WAITING, WHITE, JumpTo, LabelerUI, WindowClosed)
 from window import KEY_LEFT, KEY_RIGHT
 
 # Sidebar legend for the viewer.
@@ -247,6 +247,8 @@ def main():
                                current, len(csvs))
             except JumpTo as jump:
                 current = jump.index
+    except WindowClosed:
+        pass
     finally:
         ui.close()
     print("\nDone.")

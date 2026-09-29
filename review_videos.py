@@ -24,7 +24,7 @@ import sys
 import processing
 import review_session
 from job import END_BEHAVIORS, END_FIRST_FOOT
-from labeler_ui import LabelerUI
+from labeler_ui import LabelerUI, WindowClosed
 
 
 def parse_args():
@@ -60,6 +60,8 @@ def main():
     try:
         review_session.load_jobs(jobs, ui)
         review_session.run(jobs, ui, output_dir)
+    except WindowClosed:
+        return
     finally:
         if ui is not None:
             ui.close()

@@ -98,6 +98,11 @@ class Window:
         """Test hook: inject a resize or mouse event (see window_server._test_event)."""
         self._send("post " + json.dumps(spec))
 
+    @property
+    def closed(self):
+        """True once the window has been closed (its process has exited)."""
+        return self._proc.poll() is not None
+
     def close(self):
         """Close the window and release the shared memory. Safe to call twice."""
         if self._closed:
