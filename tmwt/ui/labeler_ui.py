@@ -64,6 +64,8 @@ REVIEW_OPTIONS = [
 ]
 # Offered on the review prompt only when more than one person was tracked.
 WRONG_PERSON_OPTION = ("5", "Wrong person tracked (pick the walker)", "person", (ord("5"),))
+# Offered only when the pose check flagged points (see session/review.py).
+FLAGGED_OPTION = ("6", "Review flagged points (orange)", "flags", (ord("6"),))
 
 # Colours for telling people apart on the "pick the walker" screen.
 PERSON_COLORS = [(0, 255, 0), (255, 160, 0), (255, 0, 255), (0, 200, 255), (60, 60, 255)]
@@ -487,17 +489,20 @@ class LabelerUI:
                                    background=background, dim=0.2)
         return choice == "yes"
 
-    def ask_review(self, background, summary_lines, note=None, wrong_person=False):
+    def ask_review(self, background, summary_lines, note=None, wrong_person=False, flagged=False):
         """
         The review prompt over the last frame: the detection summary and one
         button per option in REVIEW_OPTIONS, plus WRONG_PERSON_OPTION if
-        `wrong_person`. Returns the chosen option's value.
+        `wrong_person` and FLAGGED_OPTION if `flagged`. Returns the chosen
+        option's value.
         """
         options = list(REVIEW_OPTIONS)
         if wrong_person:
             options.insert(-2, WRONG_PERSON_OPTION)   # before Replay and Finish
+        if flagged:
+            options.insert(-2, FLAGGED_OPTION)
         main = dimmed(background, _DIM_PROMPT)
-        y = 100 if wrong_person else 110
+        y = 110 - 10 * (wrong_person + flagged)
         put_centered(main, "Was the detection successful?", y, 0.9, WHITE, 2)
         y += 40
         for text in summary_lines:

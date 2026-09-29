@@ -323,26 +323,32 @@ analysis file. `tmwt_analysis/processing_report.csv` / `.md` list every video,
 and any whose anomalies remain are also printed at the end of the run — no
 questions are asked, so it runs unattended (e.g. under SLURM).
 
-**At review**, a video whose anomalies remain:
-- opens with an alert saying which points were flagged and when;
-- shows the flagged points (and their lines) in **orange** during playback,
-  with an orange stretch on the timeline for those frames and the point names
-  in the info panel, which also lists the model strength for every video;
-- leaves flagged points out of the timing (a stray toe can't trigger a line
-  crossing);
-- asks, when approved, whether the detection is fine: **It's fine: keep it**,
-  **Smooth flagged points**, **Remove from analysis** (the video is then
-  rejected, reason "pose detection anomalies"), or **Go back**.
+**At review**, a video whose anomalies remain opens in **flagged-points
+mode**, paused on the first flagged frame:
+- the flagged points (and their lines) are **orange**, the timeline is orange
+  over those frames, and the info panel names the points (it lists the model
+  strength for every video);
+- **◀● / ●▶** (or `[` / `]`) jump to the previous / next flagged frame; the
+  usual frame-step and play controls work too;
+- **Smooth points** replaces the flagged points by interpolation (below); they
+  turn **yellow**, on the timeline too. **Unsmooth** puts them back as
+  detected;
+- **Confirm** (Enter) records that you've checked them and goes on to the
+  usual timing playback, then the review prompt.
+
+The review prompt has **Review flagged points (orange)** (`6`) for these
+videos, to go back to that mode at any time. Flagged points are left out of
+the timing until smoothed (a stray toe can't trigger a line crossing), and
+automatic timing is recomputed when you smooth or unsmooth. **Skip this file**
+removes the video; if its flagged points weren't confirmed, the reason is
+recorded as "pose detection anomalies".
 
 **Smoothing** replaces each flagged point by linear interpolation from the
 nearest frames (within 0.5 s) where that point wasn't flagged. Heels and toes
 are interpolated relative to their ankle, then placed on that frame's ankle,
 so the foot moves with the step; hips, knees and ankles are interpolated in
 position. Points with no good frames near enough are left as they were (still
-orange). The video then replays with the smoothed points, and their timeline
-stretches, in **yellow**, and asks **Keep smoothing** or **Undo smoothing**.
-Kept smoothing counts in the timing (automatic timing is recomputed) and is
-saved with the review progress.
+orange, with a note). Smoothing is saved with the review progress.
 
 Pose data is only changed by smoothing the reviewer chose, and always
 labelled: the CSV's `pose_flags` column says which points were flagged in each
