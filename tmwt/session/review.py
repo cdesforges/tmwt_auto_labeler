@@ -1,7 +1,7 @@
 """
 Phase 2 of a run: review each analysed video with the user.
 
-Each video plays back (playback) with its detection drawn on: a seek bar with
+Each video plays back (review_playback.py) with its detection drawn on: a seek bar with
 the walk's start and stop marks (drag their tabs to move them), the mark
 buttons (green dot: walk start, red dot: walk stop, M presses them in turn),
 frame-step and play buttons, then:
@@ -29,7 +29,7 @@ them, mark the timing in the playback, or skip the video.
 
 If the pose check (pose_check.py) flagged points the heavier model couldn't
 fix, opening the video shows a full-screen notice about them, then goes into
-flagged-points mode (review_flagged_points): paused on the first flagged
+flagged-points mode (flagged_points.py): paused on the first flagged
 frame, with buttons to jump between flagged frames, Smooth points / Unsmooth
 (pose_smoothing.py; smoothed points turn yellow) and Confirm, which goes on to
 the playback. Flagged points are drawn in orange everywhere and left out of
@@ -37,42 +37,23 @@ the timing until smoothed; skipping a video with unconfirmed flags records
 "pose detection anomalies" as the reason.
 """
 
-from collections import namedtuple
-
 import cv2
 
-from tmwt.ui import annotate
-from tmwt.detection import people, pose_check, pose_smoothing
-from tmwt.measurement import timing
-from tmwt.core import video_io
 from tmwt.core.job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_NO_BODY
+from tmwt.detection import people
+from tmwt.measurement import timing
+from tmwt.session.flagged_points import alert_pose_flags, review_flagged_points
+from tmwt.session.review_playback import playback
 from tmwt.ui.sidebar import APPROVED_MARK, DONE, FAILED, REJECTED_MARK, WORKING
-from tmwt.ui.player import Player
-from tmwt.pose.pose_common import FLAGGED_COLOR, SMOOTHED_COLOR
-from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE
+from tmwt.ui.widgets import GREY, KEY_ENTER, KEY_ESC, ORANGE, WHITE
 
 # review_job result: finish the review now (go to "Review complete"). (Stopping
-# to continue later is the top bar's job: see labeler_ui.SaveAndQuit.)
+# to continue later is the top bar's job: see ui/events.py.)
 QUIT = "quit"
 # Outcomes of setting endpoints (_set_endpoints).
 _REPLAY = "replay"        # endpoints set: play the video from the start
 _CANCELLED = "cancelled"  # the user cancelled endpoint picking
 _SKIP = "skip"            # the user chose to skip the file
-# Marks: M marks the start, then the stop, then the start again, and so on (the
-# tooltip and badge say which is next). Space always plays / pauses.
-_MARK_KEYS = (ord("m"), ord("M"))
-_STOP_BEFORE_START = "Stop is before start: mark or drag them again"
-# Seek bar ids of the two marks, and the playback values that set them.
-_MARKS = {"start": "mark_start", "stop": "mark_stop"}
-# The playback's own buttons, right of the transport controls.
-_CONFIRM = ("Confirm (Enter)", "confirm", KEY_ENTER)
-_MENU = ("Menu (Esc)", "menu", (KEY_ESC,), "menu")
-
-# How the playback ended: "confirm" or "menu"; the marks then (start, stop);
-# the last annotated frame shown (or None); and the frame index it was on.
-PlaybackResult = namedtuple("PlaybackResult", "value start end last k")
-
-
 def review_job(job, ui, i):
     """
     Review one analysed job (index i in the batch) in the window (see the
@@ -95,7 +76,7 @@ def review_job(job, ui, i):
         return None
 
     if job.pose_flags:
-        _alert_pose_flags(job, ui)
+        alert_pose_flags(job, ui)
         review_flagged_points(job, ui)
 
     note = None
@@ -197,107 +178,6 @@ def _final_confirm(job, ui, background):
                            background=background)
 
 
-def _alert_pose_flags(job, ui):
-    """Full-screen notice, when a video with flagged pose points is opened, before flagged-points mode."""
-    flags = job.pose_flags
-    examples = sorted({(round(fl.time_s, 2), pose_check.LANDMARK_NAMES[fl.landmark].replace("_", " "))
-                       for fl in flags})[:3]
-    check = job.analysis_meta.get("pose_check") or {}
-    retried = len(check.get("runs", [])) > 1
-    lines = [
-        ("Pose detection anomalies", ORANGE),
-        (f"{job.pose_flagged_frames} frame(s) have leg or foot points that look implausible,", GREY),
-        ("e.g. " + ", ".join(f"{name} at {t:.2f}s" for t, name in examples) + ".", GREY),
-        (f"Model strength: {job.model_strength}"
-         + (" (re-analysed with the heavier model; these remain)." if retried else "."), GREY),
-    ]
-    if job.pose_edits:
-        lines.append((f"{len(job.pose_edits)} of them were smoothed earlier (yellow).", GREY))
-    lines += [
-        ("Next: check them frame by frame (orange), smooth them if needed, then confirm.", GREY),
-    ]
-    ui.show_message(lines, [("Review flagged points", "review", KEY_ENTER)],
-                    background=job.info.first_frame)
-
-
-# Flagged-points mode: jump between flagged frames ([ and ]).
-_PREV_FLAG = ("Previous flagged frame ([)", "prev_flag", (ord("["),), "prev_flag")
-_NEXT_FLAG = ("Next flagged frame (])", "next_flag", (ord("]"),), "next_flag")
-
-
-def review_flagged_points(job, ui):
-    """
-    Flagged-points mode: show the video paused on the first flagged frame,
-    with the flagged points in orange (and orange on the timeline), to check
-    them before the timing. Buttons: previous / next flagged frame, the usual
-    frame step and play, Smooth points (replace the flagged points by
-    interpolation; they turn yellow) or Unsmooth (put them back as detected),
-    and Confirm, which records that the reviewer checked them and returns.
-    Automatic timing is recomputed when the points change, since smoothed
-    points count in it.
-    """
-    flagged = sorted(k for k, f in enumerate(job.frames) if f.pose_flags)
-    player = Player([f.time_s for f in job.frames])
-    player.k, player.paused = flagged[0], True
-    source = video_io.FrameSource(job)
-    ui.start_playback()
-    alert = None
-    try:
-        while True:
-            player.highlights = _pose_highlights(job)
-            frame = source.get(player.k)
-            if frame is None:
-                break
-            image, _ = annotate.render_frame(frame, job.frames[player.k], job.walk_start,
-                                             job.walk_end, model_strength=job.model_strength)
-            smoothed = len(job.pose_edits)
-            label = (f"FLAGGED POINTS  {job.pose_flagged_frames} frame(s)"
-                     + (f"  {smoothed} smoothed (yellow)" if smoothed else "  (orange)"))
-            toggle = (("Unsmooth", "unsmooth", ()) if job.pose_edits
-                      else ("Smooth points", "smooth", ()))
-            specs = ([_PREV_FLAG] + player.transport() + [_NEXT_FLAG, toggle]
-                     + [("Confirm (Enter)", "confirm", KEY_ENTER)])
-            value, _ = player.show(ui, image, specs, label,
-                                   marks=[(job.walk_start, GREEN), (job.walk_end, RED)], alert=alert)
-            alert = None
-            if value == "confirm":
-                job.pose_confirmed = True
-                print(f"  Flagged points confirmed ({smoothed} smoothed).")
-                break
-            if value in ("prev_flag", "next_flag"):
-                ahead = [k for k in flagged if k > player.k] if value == "next_flag" else \
-                        [k for k in flagged if k < player.k][::-1]
-                player.k = ahead[0] if ahead else player.k
-                player.paused = True
-            elif value == "smooth":
-                edits, failed = pose_smoothing.smooth_flagged(job)
-                print(f"  Smoothed {len(edits)} flagged point(s); {failed} couldn't be.")
-                if failed:
-                    alert = (f"{failed} point(s) had no good frames within "
-                             f"{pose_smoothing.MAX_GAP_S:g} s and stay orange")
-                _retime(job)
-            elif value == "unsmooth":
-                pose_smoothing.undo_all(job)
-                print("  Smoothing undone.")
-                _retime(job)
-            if not player.advance():
-                player.paused = True   # stay on the last frame until confirmed
-    finally:
-        source.close()
-
-
-def _pose_highlights(job):
-    """Seek-bar colours: orange for frames with flagged points left, yellow for smoothed ones."""
-    return {FLAGGED_COLOR: [k for k, f in enumerate(job.frames) if set(f.pose_flags) - f.pose_smoothed],
-            SMOOTHED_COLOR: [k for k, f in enumerate(job.frames) if f.pose_smoothed]}
-
-
-def _retime(job):
-    """Recompute automatic timing after the points it's based on changed."""
-    if job.timing_source == "auto" and job.far_ep is not None and job.near_ep is not None:
-        timing.update_timing(job)
-
-
 def _apply_marks(job, start, end, detail):
     """
     Make the user's marks the job's timing (manual), if they make a walk.
@@ -311,94 +191,6 @@ def _apply_marks(job, start, end, detail):
     job.timing_source, job.timing_detail = "manual", detail
     print(f"  Timing set by hand: {start:.3f}s to {end:.3f}s")
     return None
-
-
-def playback(job, ui, start_k=None, notice=None):
-    """
-    Play the job back in real time with its detection drawn on (see the module
-    docs): the seek bar and marks, mark buttons, frame-back / play-pause /
-    frame-forward (player.py), Confirm and the menu button. Plays until
-    Confirm or the menu is chosen; the video pauses on its last frame.
-
-    The walk's start and stop can be moved by clicking a mark button (the frame
-    on screen when it was pressed) or by dragging a mark's tab along the seek
-    bar. Changed marks are shown in a badge at the top left, and a stop before
-    the start as an error until it's fixed (Confirm waits for that).
-
-    Args:
-        start_k: frame to resume at, paused (e.g. after the menu); None plays
-            from the start.
-        notice: text to show in orange above the seek bar (e.g. why the last
-            action didn't work); the job's timing note is shown otherwise.
-
-    Frames come from a video_io.FrameSource, so scrubbing and stepping back show
-    exactly the frames the analysis used.
-
-    Returns:
-        A PlaybackResult. The marks are the job's own timing if they weren't
-        changed; the job itself isn't changed.
-    """
-    marks = {"start": job.walk_start, "stop": job.walk_end}
-    original = dict(marks)
-    player = Player([f.time_s for f in job.frames], highlights=_pose_highlights(job))
-    if start_k is not None:
-        player.k, player.paused = start_k, True
-    if notice is None and job.timing_source == "auto" and job.timing_note:
-        notice = job.timing_note
-    source = video_io.FrameSource(job)
-    m_next = "start"   # which mark M sets next
-    ui.start_playback()
-    last = None
-    try:
-        while True:
-            frame = source.get(player.k)
-            if frame is None:
-                break
-            start, end = marks["start"], marks["stop"]
-            backwards = start is not None and end is not None and end <= start
-            # A stop before the start isn't a walk: don't draw it as finished.
-            last, _ = annotate.render_frame(frame, job.frames[player.k], start,
-                                            None if backwards else end,
-                                            model_strength=job.model_strength)
-            specs = ([_mark_button(which, m_next) for which in _MARKS] + player.transport()
-                     + [_CONFIRM, _MENU])
-            label = None
-            if marks != original:
-                label = f"EDITED  start {_mark_text(start)}  stop {_mark_text(end)}  (M: {m_next})"
-            value, pressed_at = player.show(
-                ui, last, specs, label, marks=[(start, GREEN, "start"), (end, RED, "stop")],
-                alert=_STOP_BEFORE_START if backwards else None, notice=notice)
-
-            if value == "menu" or (value == "confirm" and not backwards):
-                return PlaybackResult(value, marks["start"], marks["stop"], last, player.k)
-            if value in _MARKS.values():
-                which = "start" if value == "mark_start" else "stop"
-                marks[which] = player.time_on_screen(pressed_at)
-                m_next = "stop" if which == "start" else "start"
-                notice = None
-                print(f"  Walk {which} marked at {marks[which]:.3f}s")
-            elif isinstance(value, tuple) and value[0] == "mark":
-                _, which, t = value
-                marks[which] = t
-                notice = None
-                print(f"  Walk {which} dragged to {t:.3f}s")
-            if not player.advance():
-                player.paused = True   # stay on the last frame
-    finally:
-        source.close()
-    return PlaybackResult("menu", marks["start"], marks["stop"], last, player.k)
-
-
-def _mark_button(which, m_next):
-    """The green (start) / red (stop) dot button; M works on the one it sets next."""
-    m = which == m_next
-    return (f"Mark walk {which}" + (" (M)" if m else ""), _MARKS[which],
-            _MARK_KEYS if m else (), _MARKS[which])
-
-
-def _mark_text(t):
-    """A mark for the badge: its time, or a dash if not marked yet."""
-    return "--" if t is None else f"{t:.2f}s"
 
 
 def summary_lines(job):

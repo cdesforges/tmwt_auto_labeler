@@ -36,7 +36,8 @@ from tmwt.measurement import timing
 from tmwt.core.job import COURSE_M
 from tmwt.detection import pose_check
 from tmwt.pose.pose_common import FLAGGED_COLOR, SMOOTHED_COLOR
-from tmwt.ui.labeler_ui import JumpTo, LabelerUI, WindowClosed
+from tmwt.ui.events import JumpTo, WindowClosed
+from tmwt.ui.labeler_ui import LabelerUI
 from tmwt.ui.sidebar import DONE, FAILED, UNREVIEWED, WAITING
 from tmwt.ui.top_bar import folder_title
 from tmwt.ui.player import Player

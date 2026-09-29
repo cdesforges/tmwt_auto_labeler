@@ -29,7 +29,7 @@ from tmwt.detection import people, pose_check
 from tmwt.pose import pose_common
 from tmwt.pose.pose_backend import heavier_model, model_strength
 from tmwt.core.job import STATUS_FAILED, VideoJob
-from tmwt.ui.labeler_ui import WindowClosed
+from tmwt.ui.events import WindowClosed
 from tmwt.ui.sidebar import DONE, FAILED, WORKING
 
 # Video file extensions to look for.

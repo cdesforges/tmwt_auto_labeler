@@ -536,13 +536,18 @@ tmwt/
     onset.py              #   Hindsight walk-start detection on distance signals
     timing.py             #   Walk start / end from the analysed frames
   session/                # The review
-    review.py             #   Reviewing one video: playback, prompt, endpoints, manual timing
+    review.py             #   Reviewing one video: the flow, the menu, the final confirmation
+    review_playback.py    #   The review's playback: marks, Confirm, menu button
+    flagged_points.py     #   The pose-anomaly notice and flagged-points mode (smooth / unsmooth)
     review_session.py     #   Loading, reviewing, saving and reporting a folder
     review_progress.py    #   Saving / restoring an unfinished review
   ui/                     # The window and what's drawn in it
     window.py             #   The window as the program sees it: show a canvas, poll for input
     window_server.py      #   The window process: resizable pygame window
-    labeler_ui.py         #   The labeler's screens and input handling; quit / save exceptions
+    base_window.py        #   BaseWindow: the window, its panels and input handling
+    pickers.py            #   PickerScreens: picking the rope endpoints and the walker
+    labeler_ui.py         #   LabelerUI(PickerScreens, BaseWindow): progress, playback frame, menus
+    events.py             #   Leaving a screen: JumpTo, and the UserQuit family (window closed, save / quit)
     panel.py              #   Panel: a region of the window (base of the top bar and sidebar)
     top_bar.py            #   Top bar: quit and save buttons, folder title, logo
     sidebar.py            #   Sidebar: the colour-coded file list, its states and marks

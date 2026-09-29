@@ -29,7 +29,6 @@ from collections import namedtuple
 
 import numpy as np
 
-from tmwt.pose import pose_common as pc
 
 # Leg and foot landmarks checked, with the names used in reports and the CSV.
 LANDMARK_NAMES = {

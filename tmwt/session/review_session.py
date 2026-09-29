@@ -18,7 +18,7 @@ from tmwt.session import review_progress
 from tmwt.core.job import (REVIEW_APPROVED, REVIEW_REJECTED, REVIEW_UNREVIEWED, STATUS_FAILED,
                  STATUS_INCOMPLETE, STATUS_NEEDS_INPUT, STATUS_NO_BODY, STATUS_OK,
                  VideoJob)
-from tmwt.ui.labeler_ui import JumpTo, QuitWithoutSaving, SaveAndQuit, WindowClosed
+from tmwt.ui.events import JumpTo, QuitWithoutSaving, SaveAndQuit, WindowClosed
 from tmwt.ui.sidebar import (APPROVED_MARK, DONE, FAILED, NEEDS_INPUT, REJECTED_MARK, SAVED_MARK,
                              UNREVIEWED, WORKING)
 from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE
