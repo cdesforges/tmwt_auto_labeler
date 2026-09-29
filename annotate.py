@@ -115,10 +115,6 @@ def draw_info_panel(height, time_s, frame_idx, t_along, walk_start, walk_end,
     y += 22
     if t_along is not None:
         text(f"t_along:  {t_along:+.3f}", y, 0.45, _INFO)
-        y += 22
-        # Image-space estimate, marked "~": NOT perspective-corrected, so it can
-        # be several metres off mid-course.
-        text(f"~Dist cam:{(1.0 - t_along) * COURSE_M:5.2f}m", y, 0.45, (120, 200, 120))
 
     text(controls, height - 15, 0.4, _RULE)
     return panel

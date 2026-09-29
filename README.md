@@ -310,8 +310,7 @@ are written to `--output_dir`. Videos rejected at review get no outputs.
 | `<basename>_annotated.mp4`  | Source frames with skeleton, rope, and info panel overlaid.                                           |
 | `<basename>_skeleton.mp4`   | Black canvas with skeleton, rope, and info panel only — de-identified for sharing.                    |
 
-The info panel on both output videos shows walk status, timer, and distance
-from the camera (assuming a 10 m course).
+The info panel on both output videos shows the walk status and timer.
 
 Each run also writes `labeling_report.csv` and `labeling_report.md` with one row
 per video: its result (`approved`, `auto (not reviewed)`, `rejected`,
