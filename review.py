@@ -9,7 +9,8 @@ a prompt (LabelerUI.ask_review):
   - Walk start/stop inaccurate -> replay, marking the start and stop with a button
   - Wrong person tracked     -> (only with several people) click the walker;
                                 timing is recomputed and the video replays
-  - Body not detected        -> the file is rejected; nothing is saved
+  - Skip this file           -> the file is rejected; nothing is saved
+A video in which nobody was detected at all only offers "Skip this file".
 Videos whose endpoints couldn't be found automatically ask for clicks first,
 with the start point pre-placed where the subject was detected standing. If new
 endpoints don't give a complete timing, the user is asked straight away to redo
@@ -25,7 +26,7 @@ import annotate
 import people
 import timing
 import video_io
-from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED
+from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_NO_BODY
 from labeler_ui import (DONE, FAILED, GREY, KEY_ENTER, KEY_ESC, KEY_SPACE,
                         ORANGE, WHITE, WORKING)
 
@@ -51,15 +52,23 @@ def review_job(job, ui, i):
     ui.active = i
     ui.set_state(i, WORKING)
 
+    if job.status == STATUS_NO_BODY:
+        ui.show_message([
+            ("No body detected", ORANGE),
+            (f"{job.name}: no person was found in any frame of this video.", GREY),
+        ], [("Skip this file", "skip", KEY_ENTER + (KEY_ESC,))], background=job.info.first_frame)
+        _reject(job, ui, i, "no body detected")
+        return None
+
     note = None
     replay = True
     if job.far_ep is None or job.near_ep is None:
         reason = f"{job.name}: automatic detection failed ({job.endpoint_problem})"
         outcome, note = _set_endpoints(job, ui, reason)
         if outcome == _CANCELLED:
-            _reject(job, ui, i, "rope endpoints not set")
-            return None
-        if outcome == _SKIP:
+            # Back to the options, where the user can retry, time it, or skip it.
+            note = "Rope endpoints not set: set them (2), time it manually (3), or skip it (4)."
+        elif outcome == _SKIP:
             _reject(job, ui, i, "no walk timing found")
             return None
         replay = outcome == _REPLAY
@@ -93,8 +102,8 @@ def review_job(job, ui, i):
         elif choice == "timing":
             note = _time_manually(job, ui, last_frame)
             replay = False
-        elif choice == "body":
-            _reject(job, ui, i, "body not detected")
+        elif choice == "skip":
+            _reject(job, ui, i, "skipped at review")
             return None
         elif choice == "quit":
             return QUIT

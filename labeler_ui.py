@@ -79,7 +79,7 @@ REVIEW_OPTIONS = [
     ("1", "Looks good", "approve", (ord("1"),) + KEY_ENTER),
     ("2", "Rope endpoints inaccurate (re-click them)", "endpoints", (ord("2"),)),
     ("3", "Walk start/stop inaccurate (time it manually)", "timing", (ord("3"),)),
-    ("4", "Body not detected (skip this file)", "body", (ord("4"),)),
+    ("4", "Skip this file", "skip", (ord("4"),)),
     ("R", "Replay", "replay", (ord("r"), ord("R"))),
     ("Esc", "Quit review (save the rest unreviewed)", "quit", (KEY_ESC,)),
 ]

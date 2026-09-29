@@ -37,7 +37,7 @@ import pose_common
 import review
 from job import (END_BEHAVIORS, END_FIRST_FOOT, REVIEW_APPROVED, REVIEW_REJECTED,
                  REVIEW_UNREVIEWED, STATUS_FAILED, STATUS_INCOMPLETE, STATUS_NEEDS_INPUT,
-                 STATUS_OK, VideoJob)
+                 STATUS_NO_BODY, STATUS_OK, VideoJob)
 from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ENTER, KEY_ESC, NEEDS_INPUT,
                         ORANGE, RED, UNREVIEWED, WHITE, WORKING, JumpTo, LabelerUI)
 from pose_backend import BACKENDS, get_backend
@@ -179,6 +179,7 @@ def ask_to_review(ui, jobs):
         (sum(j.status == STATUS_OK for j in jobs), "timed automatically", GREEN),
         (sum(j.status == STATUS_NEEDS_INPUT for j in jobs), "need the finish point clicked", ORANGE),
         (sum(j.status == STATUS_INCOMPLETE for j in jobs), "with incomplete timing", RED),
+        (sum(j.status == STATUS_NO_BODY for j in jobs), "with no body detected", RED),
         (sum(j.status == STATUS_FAILED for j in jobs), "failed", RED),
     ]
     lines = [("Analysis complete", GREEN), (f"{len(jobs)} video(s) analysed", WHITE)]
@@ -233,7 +234,8 @@ def save_outputs(jobs, ui):
     automatic results of the rest (marked unreviewed).
     """
     to_save = [(i, job) for i, job in enumerate(jobs)
-               if job.review != REVIEW_REJECTED and job.far_ep is not None and job.frames]
+               if job.frames and job.review != REVIEW_REJECTED
+               and (job.far_ep is not None or job.review == REVIEW_APPROVED)]
     for k, (i, job) in enumerate(to_save):
         approved = job.review == REVIEW_APPROVED
         print(f"\n  Saving ({k + 1}/{len(to_save)}): {job.name}"

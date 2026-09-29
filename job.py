@@ -34,6 +34,7 @@ STATUS_PENDING = "pending"            # not analysed yet
 STATUS_OK = "ok"                      # endpoints and full timing found automatically
 STATUS_INCOMPLETE = "incomplete"      # endpoints found, but no walk start or end
 STATUS_NEEDS_INPUT = "needs_input"    # endpoint(s) must be clicked at review
+STATUS_NO_BODY = "no_body"            # nobody detected in any frame; can only be skipped
 STATUS_FAILED = "failed"              # can't be used at all (see VideoJob.error)
 
 # Review outcome (VideoJob.review).
@@ -51,7 +52,7 @@ class FrameResult:
     frame_idx: int                         # 0 = the video's first content frame
     time_s: float                          # video timestamp
     H: Optional[np.ndarray]                # reference -> this frame homography (None if lost)
-    people: list = field(default_factory=list)   # every person's 33-landmark pose (pose_common)
+    people: list = field(default_factory=list)   # every person's pose (pose_common layout)
 
     # The subject (set by people.set_subject): their pose and ankle midpoint in
     # this frame's pixels, or None where they weren't seen.

@@ -34,7 +34,7 @@ alternative backends are supported:
 | Backend    | Install                                                                                     | Notes                                                                                                          |
 |------------|---------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
 | `mediapipe`| _(default, already installed)_                                                              | Fastest, lightest. Best for well-lit, close-range footage.                                                     |
-| `rtmlib`   | `pip install rtmlib onnxruntime`                                                            | RTMPose via ONNX Runtime. Uses CoreML on Apple Silicon by default. Best accuracy at distance; clean install.   |
+| `rtmlib`   | `pip install rtmlib onnxruntime`                                                            | RTMPose "body with feet" (Halpe-26) via ONNX Runtime: body plus big toe, small toe and heel per foot. Uses CoreML on Apple Silicon by default. Best accuracy at distance; clean install. |
 | `mmpose`   | `pip install openmim mmengine` then `MMCV_WITH_OPS=1 FORCE_CUDA=0 pip install --no-build-isolation "mmcv>=2.0.1,<2.2.0" && pip install mmpose mmdet` | Same RTMPose weights as `rtmlib`. Heavier install; CPU-only on Apple Silicon (no MPS ops in mmcv). |
 
 ---
@@ -54,7 +54,7 @@ python label.py --input_dir <videos_dir> [options]
 | `--backend`    |          | `mediapipe`                            | Pose backend. One of `mediapipe`, `mmpose`, `rtmlib`.                                                                    |
 | `--model`      |          | _(backend-specific)_                   | Pose model. Interpretation depends on the backend (see below).                                                           |
 | `--no_matte_crop` |       | _off (cropping enabled)_               | Disable automatic cropping of solid-color mattes (letterbox / pillarbox bars) around the active picture.                 |
-| `--endpoint_behavior` |  | `first_foot`                          | What counts as crossing the start line (when one is clicked) and the finish line: the first foot to cross (`first_foot`) or the midpoint of the two ankles (`ankle_midpoint`). |
+| `--endpoint_behavior` |  | `first_foot`                          | What counts as crossing the start line (when one is clicked) and the finish line: the first toe to cross, big or small, on either foot (`first_foot`), or the midpoint of the two ankles (`ankle_midpoint`). |
 | `--no_display` |          | _off (window + review enabled)_        | Run unattended: no window and no review. Automatic results are saved unreviewed; videos needing manual endpoints are reported as failed. |
 
 #### `--model` values by backend
@@ -142,7 +142,7 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
    | Rope endpoints inaccurate (`2`) | Re-place the endpoints on the first frame (see [Endpoint detection](#endpoint-detection)). Timing is recomputed from the cached analysis and the video replays. |
    | Walk start/stop inaccurate (`3`) | The video replays in real time. Click **Mark start** when the walk starts and **Mark stop** when it ends (Space also works). The mark uses the frame on screen when the button was pressed. |
    | Wrong person tracked (`5`) | Only shown when several people were tracked. Click the person doing the walk test on a frame showing everyone; timing is recomputed for them and the video replays. |
-   | Body not detected (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
+   | Skip this file (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
    | Replay (`R`) | Play the video again. |
    | Quit review (Esc) | Review stops; the remaining videos keep their automatic results, marked unreviewed. |
 
@@ -172,6 +172,20 @@ away to **Redo endpoints**, **Time manually** or **Skip this file**. A common
 cause: the subject is already walking when the video begins, so there's no
 standing start. Use **Move start point** and click the start line.
 
+If you cancel endpoint picking, you're taken back to the review options, where
+you can try again, time the video manually, or skip it. A video in which nobody
+was detected at all only offers **Skip this file**.
+
+## Foot points
+
+Every backend reports the same 35 landmarks (MediaPipe's 33 plus a small toe
+per foot), saved as `lm_00` to `lm_34` in each CSV. Foot points, left / right:
+ankle 27 / 28, heel 29 / 30, big toe 31 / 32, small toe 33 / 34. rtmlib and
+mmpose use Halpe-26 "body with feet" models, which provide all of them (not the
+face or hand detail); MediaPipe provides all but the small toes. If no toe is
+seen crossing a line, the crossing falls back to the ankles, then the ankle
+midpoint.
+
 ## Multiple people
 
 Everyone in view is detected and followed through the video (up to five
@@ -189,7 +203,7 @@ look back over the whole walk.
 
 The end is the moment the subject crosses the finish line (near endpoint). Line
 crossings — the finish line, and the start line when one is clicked — count
-the first foot to cross by default, or the midpoint of the two ankles with
+the first toe to cross (big or small, either foot) by default, or the midpoint of the two ankles with
 `--endpoint_behavior ankle_midpoint`. When the far endpoint is the subject's standing
 position, the start is found by working backwards from that end:
 
@@ -285,7 +299,7 @@ data_export.py       # Per-video outputs (CSV, timing JSON, videos) and reading 
 report.py            # End-of-run labeling report
 view.py              # Skeleton-only playback of saved CSVs
 pose_backend.py      # Pose backend factory
-pose_common.py       # Shared 33-landmark pose layout, drawing and ankle helpers
+pose_common.py       # Shared pose layout (body + feet), drawing and ankle helpers
 pose_mediapipe.py    # MediaPipe backend
 pose_mmpose.py       # MMPose backend
 pose_rtmlib.py       # RTMLib (ONNX Runtime) backend

@@ -1,9 +1,10 @@
 """
 MMPose pose backend.
 
-Runs MMPose's MMPoseInferencer (top-down 2D pose estimation). It predicts
-COCO-17 keypoints, which are remapped into the 33-landmark layout (see
-pose_common.py).
+Runs MMPose's MMPoseInferencer (top-down 2D pose estimation). The default
+`body26` model predicts Halpe-26 keypoints (body plus big toe, small toe and
+heel on each foot), which are remapped into the shared landmark layout (see
+pose_common.py). COCO-17 models (e.g. `human`) also work, without the feet.
 
 Install:
     pip install openmim
@@ -11,22 +12,22 @@ Install:
     mim install mmdet
 
 Notes:
-    - `model_path` is an MMPose alias or config path; the default 'human' alias
-      uses RTMPose + RTMDet.
+    - `model_path` is an MMPose alias or config path; the default 'body26' alias
+      is RTMPose-m trained on Halpe-26, with RTMDet as the person detector.
     - MMPose has no streaming mode, so both landmarker factories are the same and
       detect_poses ignores its timestamp.
     - Each model is loaded once per process and shared by every landmarker, so
       it isn't reloaded for every video (see _load_inferencer).
 """
 
-from pose_common import coco17_to_landmarks
+from pose_common import halpe26_to_landmarks
 
 try:
     from mmpose.apis import MMPoseInferencer
 except ImportError:
     MMPoseInferencer = None
 
-DEFAULT_MODEL_PATH = "human"
+DEFAULT_MODEL_PATH = "body26"
 
 
 # Loaded MMPoseInferencer models, by model path/alias; see _load_inferencer.
@@ -67,7 +68,7 @@ def create_image_landmarker(model_path=DEFAULT_MODEL_PATH, num_poses=1):
 
 
 def detect_poses_image(landmarker, frame_bgr):
-    """Detect poses in one frame. Returns up to num_poses 33-landmark poses."""
+    """Detect poses in one frame. Returns up to num_poses layout poses (pose_common)."""
     result = next(landmarker.inferencer(frame_bgr, show=False))
     people = (result.get("predictions") or [[]])[0]
     people = sorted(people, key=lambda p: p.get("bbox_score", 0.0), reverse=True)
@@ -76,7 +77,7 @@ def detect_poses_image(landmarker, frame_bgr):
     for person in people[:landmarker.num_poses]:
         keypoints = person.get("keypoints", [])
         scores = person.get("keypoint_scores", [1.0] * len(keypoints))
-        poses.append(coco17_to_landmarks(keypoints, scores, w, h))
+        poses.append(halpe26_to_landmarks(keypoints, scores, w, h))
     return poses
 
 

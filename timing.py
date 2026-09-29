@@ -8,8 +8,9 @@ has been analysed.
     If the user clicked the far endpoint as a start LINE and the subject stood
     behind it, the start is instead the moment they cross that line.
 
-Which body point crosses the lines is job.endpoint_behavior: the first ankle to
-cross (END_FIRST_FOOT, default) or the midpoint of the two ankles.
+Which body point crosses the lines is job.endpoint_behavior: the first toe to
+cross, big or small, on either foot (END_FIRST_FOOT, default), or the midpoint
+of the two ankles.
 
 Line crossings use t_along (position along the rope in image space, 0 = far,
 1 = near), smoothed with an EMA to suppress keypoint jitter.
@@ -121,39 +122,49 @@ def detect_walk_times(job):
 
 class _Crossings:
     """
-    Line crossings by the body point job.endpoint_behavior names: the first of
-    the two ankles to cross (END_FIRST_FOOT), or their midpoint. Each series is
-    t_along smoothed with the same EMA. With END_FIRST_FOOT, falls back to the
-    midpoint when neither ankle is ever seen crossing.
+    Line crossings by the body point job.endpoint_behavior names.
+
+    END_FIRST_FOOT: the first toe (big or small, either foot) to cross; if no
+    toe is ever seen crossing (e.g. the toes weren't detected), the first ankle;
+    failing that, the ankle midpoint. END_ANKLE_MIDPOINT: the midpoint. Every
+    series is t_along smoothed with the same EMA.
     """
 
     def __init__(self, job, times):
         self.times = times
-        self.midpoint = [f.t_smooth for f in job.frames]
+        midpoint = [f.t_smooth for f in job.frames]
         if job.endpoint_behavior == END_ANKLE_MIDPOINT:
-            self.series = [self.midpoint]
+            self.tiers = [[midpoint]]
         else:
-            self.series = [_ankle_series(job, idx)
-                           for idx in (pose_common.LEFT_ANKLE_IDX, pose_common.RIGHT_ANKLE_IDX)]
+            toes = [_landmark_series(job, idx) for idx in pose_common.TOE_IDXS]
+            ankles = [_landmark_series(job, idx)
+                      for idx in (pose_common.LEFT_ANKLE_IDX, pose_common.RIGHT_ANKLE_IDX)]
+            self.tiers = [toes, ankles, [midpoint]]
 
     def crossing(self, level, after=None):
         """First time the body point crosses `level` from below, at or after `after`."""
-        found = [t for t in (find_crossing(self.times, s, level, after) for s in self.series)
-                 if t is not None]
-        return min(found) if found else find_crossing(self.times, self.midpoint, level, after)
+        for series in self.tiers:
+            found = [t for t in (find_crossing(self.times, s, level, after) for s in series)
+                     if t is not None]
+            if found:
+                return min(found)
+        return None
 
     def position_at(self, time_s):
-        """The body point's smoothed t_along at `time_s` (the leading foot's, for first_foot)."""
-        values = [v for v in (_value_at(self.times, s, time_s) for s in self.series) if v is not None]
-        return max(values) if values else _value_at(self.times, self.midpoint, time_s)
+        """The body point's smoothed t_along at `time_s` (the leading toe's, for first_foot)."""
+        for series in self.tiers:
+            values = [v for v in (_value_at(self.times, s, time_s) for s in series) if v is not None]
+            if values:
+                return max(values)
+        return None
 
 
-def _ankle_series(job, ankle_idx):
-    """One ankle's t_along in every frame, smoothed like the midpoint's (None where unseen)."""
+def _landmark_series(job, idx):
+    """One landmark's t_along in every frame, smoothed like the midpoint's (None where unseen)."""
     h, w = job.info.first_frame.shape[:2]
     values = []
     for f in job.frames:
-        lm = f.pose[ankle_idx] if f.pose is not None else None
+        lm = f.pose[idx] if f.pose is not None else None
         px = pose_common.landmark_px(lm, w, h)
         values.append(metric.t_along(px, f.far_ep, f.near_ep) if px is not None else None)
     return smooth_t_along(values)

@@ -10,7 +10,7 @@ import csv
 import os
 from datetime import datetime
 
-from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_FAILED
+from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_FAILED, STATUS_NO_BODY
 
 # Overall results, in the order they're listed.
 APPROVED = "approved"
@@ -37,8 +37,10 @@ def job_result(job):
     """
     if job.review == REVIEW_REJECTED:
         return REJECTED, job.review_note
-    if job.status == STATUS_FAILED:
+    if job.status in (STATUS_FAILED, STATUS_NO_BODY):
         return FAILED, job.error
+    if job.review == REVIEW_APPROVED:
+        return APPROVED, job.review_note
     if job.far_ep is None:
         if job.endpoint_problem:
             return FAILED, f"{job.endpoint_problem}; rope endpoints need clicking at review"
@@ -46,8 +48,6 @@ def job_result(job):
     if job.duration is None:
         missing = "walk start" if job.walk_start is None else "walk end"
         return FAILED, f"no {missing} detected"
-    if job.review == REVIEW_APPROVED:
-        return APPROVED, job.review_note
     return UNREVIEWED, job.review_note
 
 

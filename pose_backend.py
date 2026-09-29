@@ -9,8 +9,9 @@ Each backend module exposes the same small inference API:
   detect_poses(landmarker, frame_bgr, timestamp_ms) -> list[pose]
   detect_poses_image(landmarker, frame_bgr) -> list[pose]
 
-and every landmarker has close(). Poses are lists of 33 landmarks in the layout
-described in pose_common.py, which also holds the drawing and ankle helpers.
+and every landmarker has close(). Poses are lists of landmarks in the layout
+described in pose_common.py (including the feet), which also holds the drawing
+and ankle helpers.
 
 Creating landmarkers is cheap to repeat: rtmlib and mmpose load each model once
 per process and share it, and MediaPipe models load quickly (its VIDEO-mode

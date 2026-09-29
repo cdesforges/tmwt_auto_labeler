@@ -1,23 +1,35 @@
 """
 Pose layout and helpers shared by every pose backend.
 
-Every backend returns poses in MediaPipe's 33-landmark layout: a list of 33
-landmarks, each with normalized .x / .y (0-1 across the frame) and .z. Backends
-that predict fewer keypoints (the COCO-17 models used by rtmlib and mmpose)
-leave the unmapped slots as None. Everything downstream — drawing, tracking,
-CSV export and view.py — works on that one layout and never needs to know which
-backend produced it.
+Every backend returns poses in one 35-landmark layout: MediaPipe's 33 landmarks
+plus a small toe for each foot (33 left, 34 right). Each landmark has
+normalized .x / .y (0-1 across the frame) and .z. Slots a backend doesn't
+predict are None — MediaPipe has no small toes; the Halpe-26 "body with feet"
+models used by rtmlib and mmpose have no hand or face detail. Everything
+downstream — drawing, tracking, timing, CSV export and view.py — works on this
+one layout and never needs to know which backend produced it.
+
+Foot points per side (left / right): ankle 27 / 28, heel 29 / 30, big toe
+("foot index" in MediaPipe) 31 / 32, small toe 33 / 34.
 """
 
 import cv2
 
-# Number of landmarks in the MediaPipe pose layout.
-NUM_LANDMARKS = 33
+# Number of landmarks in the layout: MediaPipe's 33 plus two small toes.
+MEDIAPIPE_LANDMARKS = 33
+NUM_LANDMARKS = 35
 
 # Landmark indices used by the pipeline.
 NOSE_IDX = 0
 LEFT_ANKLE_IDX = 27
 RIGHT_ANKLE_IDX = 28
+LEFT_HEEL_IDX = 29
+RIGHT_HEEL_IDX = 30
+LEFT_BIG_TOE_IDX = 31
+RIGHT_BIG_TOE_IDX = 32
+LEFT_SMALL_TOE_IDX = 33
+RIGHT_SMALL_TOE_IDX = 34
+TOE_IDXS = (LEFT_BIG_TOE_IDX, RIGHT_BIG_TOE_IDX, LEFT_SMALL_TOE_IDX, RIGHT_SMALL_TOE_IDX)
 
 # Face landmarks (0-10). Only the nose is drawn; the rest are skipped.
 FACE_IDXS = set(range(0, 11))
@@ -37,11 +49,14 @@ POSE_CONNECTIONS = [
     (27, 29), (29, 31),
     (24, 26), (26, 28),
     (28, 30), (30, 32),
+    (27, 31), (28, 32),                 # ankle to big toe
+    (31, 33), (32, 34),                 # big toe to small toe
 ]
 
-# COCO-17 keypoint index -> MediaPipe-33 landmark index. COCO keypoints not
-# listed here (eyes, ears) are dropped.
-COCO_TO_MP = {
+# Halpe-26 keypoint index -> layout index. Halpe-26 is COCO-17 (0-16) plus
+# head, neck, hip (17-19, not kept) and six foot points (20-25). The eyes and
+# ears (1-4) aren't kept either.
+HALPE26_TO_LAYOUT = {
     0: 0,     # nose
     5: 11,    # left_shoulder
     6: 12,    # right_shoulder
@@ -55,9 +70,15 @@ COCO_TO_MP = {
     14: 26,   # right_knee
     15: 27,   # left_ankle
     16: 28,   # right_ankle
+    20: 31,   # left_big_toe
+    21: 32,   # right_big_toe
+    22: 33,   # left_small_toe
+    23: 34,   # right_small_toe
+    24: 29,   # left_heel
+    25: 30,   # right_heel
 }
 
-# COCO keypoints scoring below this are treated as missing (None).
+# Keypoints scoring below this are treated as missing (None).
 MIN_KEYPOINT_SCORE = 0.3
 
 
@@ -72,27 +93,27 @@ class Landmark:
         self.visibility = visibility
 
 
-def coco17_to_landmarks(keypoints, scores, frame_w, frame_h):
+def halpe26_to_landmarks(keypoints, scores, frame_w, frame_h):
     """
-    Convert one person's COCO-17 keypoints into the MediaPipe-33 layout.
+    Convert one person's Halpe-26 keypoints into the layout.
 
     Args:
-        keypoints: sequence of 17 (x, y, ...) pixel positions.
-        scores: sequence of 17 confidence scores.
+        keypoints: sequence of 26 (x, y, ...) pixel positions.
+        scores: sequence of 26 confidence scores.
         frame_w, frame_h: frame size, used to normalize the positions.
 
     Returns:
-        List of 33 Landmark-or-None entries.
+        List of NUM_LANDMARKS Landmark-or-None entries.
     """
     landmarks = [None] * NUM_LANDMARKS
-    for coco_idx, mp_idx in COCO_TO_MP.items():
-        if coco_idx >= len(keypoints) or coco_idx >= len(scores):
+    for src_idx, dst_idx in HALPE26_TO_LAYOUT.items():
+        if src_idx >= len(keypoints) or src_idx >= len(scores):
             continue
-        score = float(scores[coco_idx])
+        score = float(scores[src_idx])
         if score < MIN_KEYPOINT_SCORE:
             continue
-        x, y = keypoints[coco_idx][:2]
-        landmarks[mp_idx] = Landmark(float(x) / frame_w, float(y) / frame_h, 0.0, score)
+        x, y = keypoints[src_idx][:2]
+        landmarks[dst_idx] = Landmark(float(x) / frame_w, float(y) / frame_h, 0.0, score)
     return landmarks
 
 

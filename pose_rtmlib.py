@@ -1,10 +1,11 @@
 """
 RTMLib pose backend.
 
-Uses rtmlib's ONNX-Runtime Body pipeline — the same RTMPose weights MMPose uses,
-through a much lighter inference stack, with Apple Silicon acceleration via
-CoreML (device='mps'). It predicts COCO-17 keypoints, which are remapped into
-the 33-landmark layout (see pose_common.py).
+Uses rtmlib's ONNX-Runtime BodyWithFeet pipeline — RTMPose trained on
+Halpe-26, the same weights MMPose's `body26` model uses, through a much lighter
+inference stack, with Apple Silicon acceleration via CoreML (device='mps'). Its
+26 keypoints (body plus big toe, small toe and heel on each foot) are remapped
+into the shared landmark layout (see pose_common.py).
 
 Install:
     pip install rtmlib onnxruntime
@@ -28,11 +29,11 @@ Notes:
 import os
 import platform
 
-from pose_common import coco17_to_landmarks
+from pose_common import halpe26_to_landmarks
 
 try:
     import onnxruntime
-    from rtmlib import Body
+    from rtmlib import BodyWithFeet as Body
     from onnxruntime.capi.onnxruntime_pybind11_state import Fail as OrtFail
 except ImportError:
     Body = None
@@ -59,12 +60,12 @@ def _default_device():
     return "cpu"
 
 
-# Loaded rtmlib.Body models, by (mode, device); see _load_body.
+# Loaded rtmlib.BodyWithFeet models, by (mode, device); see _load_body.
 _BODIES = {}
 
 
 def _load_body(mode):
-    """The rtmlib.Body for `mode`, loaded on first use and reused afterwards."""
+    """The rtmlib.BodyWithFeet for `mode`, loaded on first use and reused afterwards."""
     if Body is None:
         raise ImportError("rtmlib is not installed. Install with:\n"
                           "    pip install rtmlib onnxruntime")
@@ -77,7 +78,7 @@ def _load_body(mode):
 
 
 class _Landmarker:
-    """A shared rtmlib.Body plus a pose cap, with the close() the other backends have."""
+    """A shared rtmlib.BodyWithFeet plus a pose cap, with the close() the other backends have."""
 
     def __init__(self, mode, num_poses):
         self.body = _load_body(mode)
@@ -113,9 +114,9 @@ def _detect_people(body, frame_bgr):
 
 
 def detect_poses_image(landmarker, frame_bgr):
-    """Detect poses in one frame. Returns up to num_poses 33-landmark poses."""
+    """Detect poses in one frame. Returns up to num_poses layout poses (pose_common)."""
     body = landmarker.body
-    if body.one_stage:
+    if getattr(body, "one_stage", False):
         keypoints, scores = body.pose_model(frame_bgr)
     else:
         boxes = _detect_people(body, frame_bgr)
@@ -125,7 +126,7 @@ def detect_poses_image(landmarker, frame_bgr):
     h, w = frame_bgr.shape[:2]
     # rtmlib already sorts people by descending detector score.
     n = min(len(keypoints), landmarker.num_poses)
-    return [coco17_to_landmarks(keypoints[i], scores[i], w, h) for i in range(n)]
+    return [halpe26_to_landmarks(keypoints[i], scores[i], w, h) for i in range(n)]
 
 
 def detect_poses(landmarker, frame_bgr, timestamp_ms):

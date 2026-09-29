@@ -15,7 +15,7 @@ import people
 import timing
 import video_io
 from job import (FrameResult, STATUS_FAILED, STATUS_INCOMPLETE,
-                 STATUS_NEEDS_INPUT, STATUS_OK)
+                 STATUS_NEEDS_INPUT, STATUS_NO_BODY, STATUS_OK)
 from tracking import GroundTracker
 
 
@@ -26,7 +26,7 @@ def analyze_job(job, model_path, backend, matte_crop=True, on_progress=None):
     automatic walk timing.
 
     Sets job.status to one of STATUS_OK / STATUS_INCOMPLETE / STATUS_NEEDS_INPUT
-    / STATUS_FAILED (with job.error).
+    / STATUS_NO_BODY / STATUS_FAILED (the last two with job.error).
 
     Args:
         job: the VideoJob to fill in.
@@ -56,7 +56,7 @@ def analyze_job(job, model_path, backend, matte_crop=True, on_progress=None):
     job.tracks = people.build_tracks(job.frames, shape, job.info.fps)
     subject = people.choose_subject(job.tracks, job.frames, shape)
     if subject is None:
-        job.status, job.error = STATUS_FAILED, "no body detected in any frame"
+        job.status, job.error = STATUS_NO_BODY, "no body detected in any frame"
         return
     people.set_subject(job, subject)
     job.subject_start = people.subject_start(job)
