@@ -182,7 +182,9 @@ one resizable window. (`review.py` starts at the review, loading the
 analysis files instead of analysing.)
 Every choice is an on-screen button: a click counts when the mouse is released
 over the same button it was pressed on. Most buttons also have a keyboard
-shortcut, shown on the button. The right-hand sidebar lists every file (scroll
+shortcut: hover over a button to see what it does and its shortcut, e.g.
+"Confirm (Enter)" or "Back one frame (Left arrow)" (menu options show theirs
+at the left, e.g. "[1]"). The right-hand sidebar lists every file (scroll
 it with the mouse wheel or trackpad when there are many),
 colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
 **green** done, **orange** needs your input at review, **red** failed or rejected.
@@ -300,11 +302,18 @@ On the endpoint screen (also **☰ > Change rope endpoints**):
   (timing starts when the subject crosses it, or at their first movement if
   they're already on or past it).
 
-If the endpoints don't give both a start and an end time, you're asked straight
-away to **Move start point**, **Move endpoint**, **Mark it in the playback**
-(mark the start and stop with the green and red dots) or **Skip this file**. A
-common cause: the subject is already walking when the video begins, so there's
-no standing start. Use **Move start point** and click the start line.
+If the endpoints don't give both a start and an end time, you're told exactly
+which is missing — **Walk start not found**, **Walk end not found**, or both —
+and why (for the start, e.g. the walk starts too soon after the recording
+begins, or the subject wasn't seen crossing the start line; for the end, no
+foot was seen crossing the finish line), and asked straight away to
+**Reselect points**, **Time manually** (the playback, where you mark what's
+missing with the green / red dot) or **Skip this file**. The final confirmation
+screen says the same, with the same choices, if you confirm a video whose
+timing is incomplete, and the playback shows an orange note saying what to
+mark. A common cause of a missing start: the subject is already walking when
+the video begins, so there's no standing start — drag the start point onto
+the start line.
 
 If you cancel endpoint picking, the video still plays, with a note: set them
 from the menu (**☰ > Change rope endpoints**) or skip the video there. A video
