@@ -113,7 +113,9 @@ your input at review, **red** failed or rejected.
    start and end. The window shows `Analysing <file> (n of N)` with a progress
    bar. Nothing asks for input here, so the whole batch can run unattended.
 2. **Review.** Each video is played back in real time with its detection
-   overlaid, then pauses and asks whether the detection was successful:
+   overlaid, then pauses and asks whether the detection was successful. Click
+   an option's button (a click counts when released over the same button), or
+   press its key:
 
    | Key | Choice | What happens |
    |---|---|---|

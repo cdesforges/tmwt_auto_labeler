@@ -3,7 +3,7 @@ The labeler's single window. Nothing else in the labeler opens a window.
 
 Two regions:
   - Main area (left): analysis progress, real-time playback, endpoint picking
-    and the review prompt.
+    and the review prompt (clickable buttons, or their keyboard shortcuts).
   - Sidebar (right): every video in the batch, colour-coded by state:
       white  = waiting
       yellow = being analysed / reviewed / saved
@@ -14,6 +14,7 @@ Two regions:
 """
 
 import time
+from collections import deque
 
 import cv2
 import numpy as np
@@ -124,6 +125,50 @@ def _dimmed(img, brightness):
     return (_fit(img, MAIN_W, MAIN_H)[0] * brightness).astype(np.uint8)
 
 
+class Button:
+    """
+    A clickable button drawn with OpenCV, behaving like a standard UI button:
+    it highlights on hover, looks pushed in (inset shadow, label shifted) while
+    held, and only counts as clicked if the mouse is released over it. Dragging
+    off before releasing cancels the click; dragging back on re-arms it.
+    """
+
+    # Fill / border colours per visual state.
+    _STYLES = {
+        "normal": ((48, 48, 48), (95, 95, 95)),
+        "hover": ((66, 66, 66), (170, 170, 170)),
+        "pressed": ((36, 36, 36), YELLOW),
+    }
+    # Inset shadow lines along the top and left edges when pressed, outermost first.
+    _SHADOW = ((0, 0, 0), (6, 6, 6), (12, 12, 12), (18, 18, 18), (24, 24, 24), (30, 30, 30))
+
+    def __init__(self, rect, key_label, text, value):
+        self.x, self.y, self.w, self.h = rect
+        self.key_label = key_label  # keyboard shortcut shown on the button
+        self.text = text
+        self.value = value          # returned when clicked
+
+    def contains(self, pt):
+        return (pt is not None and self.x <= pt[0] < self.x + self.w
+                and self.y <= pt[1] < self.y + self.h)
+
+    def draw(self, img, state):
+        """Draw in `state`: "normal", "hover" or "pressed"."""
+        fill, border = self._STYLES[state]
+        x0, y0, x1, y1 = self.x, self.y, self.x + self.w - 1, self.y + self.h - 1
+        cv2.rectangle(img, (x0, y0), (x1, y1), fill, -1)
+        shift = 0
+        if state == "pressed":
+            for k, shade in enumerate(self._SHADOW):
+                cv2.line(img, (x0 + k, y0 + k), (x1, y0 + k), shade, 1)
+                cv2.line(img, (x0 + k, y0 + k), (x0 + k, y1), shade, 1)
+            shift = 2
+        cv2.rectangle(img, (x0, y0), (x1, y1), border, 1)
+        base_y = y0 + self.h // 2 + 7 + shift
+        cv2.putText(img, self.key_label, (x0 + 16 + shift, base_y), FONT, 0.6, YELLOW, 2, cv2.LINE_AA)
+        cv2.putText(img, self.text, (x0 + 80 + shift, base_y), FONT, 0.6, WHITE, 1, cv2.LINE_AA)
+
+
 class LabelerUI:
     """The batch window. All drawing, key polling and clicks go through here."""
 
@@ -133,14 +178,20 @@ class LabelerUI:
         self.notes = [""] * len(self.names)
         self.active = None            # index of the highlighted file, or None
         self._last_progress_draw = 0.0
-        self._click = None            # last left-click in window pixels
+        self._mouse_pos = None        # latest pointer position, window pixels
+        self._mouse_events = deque()  # ("down" | "up", (x, y)) since last consumed
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WINDOW, MAIN_W + SIDEBAR_W, MAIN_H)
         cv2.setMouseCallback(WINDOW, self._on_mouse)
 
     def _on_mouse(self, event, x, y, flags, param):
+        # OpenCV calls this from inside cv2.waitKey, so events are queued and
+        # handled by whichever screen is showing once waitKey returns.
+        self._mouse_pos = (x, y)
         if event == cv2.EVENT_LBUTTONDOWN:
-            self._click = (x, y)
+            self._mouse_events.append(("down", (x, y)))
+        elif event == cv2.EVENT_LBUTTONUP:
+            self._mouse_events.append(("up", (x, y)))
 
     # --- Sidebar ---------------------------------------------------------------
 
@@ -257,28 +308,51 @@ class LabelerUI:
 
     def ask_review(self, background, summary_lines, note=None):
         """
-        The review prompt over the last frame: the detection summary and the
-        options in REVIEW_OPTIONS. Returns the chosen option's id.
+        The review prompt over the last frame: the detection summary and one
+        button per option in REVIEW_OPTIONS. Options can be clicked or chosen
+        with their keyboard shortcut. Returns the chosen option's id.
         """
-        main = _dimmed(background, _DIM_PROMPT)
-        y = 120
-        _put_centered(main, "Was the detection successful?", y, 0.9, WHITE, 2)
+        base = _dimmed(background, _DIM_PROMPT)
+        y = 110
+        _put_centered(base, "Was the detection successful?", y, 0.9, WHITE, 2)
         y += 40
         for text in summary_lines:
-            _put_centered(main, text, y, 0.55, GREY, 1)
+            _put_centered(base, text, y, 0.55, GREY, 1)
             y += 26
-        y += 25
-        x = MAIN_W // 2 - 250
-        for key_label, text, _ in REVIEW_OPTIONS:
-            cv2.putText(main, f"[{key_label}]", (x, y), FONT, 0.65, YELLOW, 2, cv2.LINE_AA)
-            cv2.putText(main, text, (x + 80, y), FONT, 0.65, WHITE, 1, cv2.LINE_AA)
-            y += 42
+        y += 16
+
+        btn_w, btn_h, gap = 560, 44, 10
+        buttons = []
+        for key_label, text, value in REVIEW_OPTIONS:
+            buttons.append(Button(((MAIN_W - btn_w) // 2, y, btn_w, btn_h), f"[{key_label}]", text, value))
+            y += btn_h + gap
         if note:
-            _put_centered(main, note, y + 20, 0.55, ORANGE, 1)
+            _put_centered(base, note, y + 18, 0.55, ORANGE, 1)
+
+        self._mouse_events.clear()   # ignore clicks made during playback
+        armed = None                 # button the mouse was pressed on, if any
         while True:
-            choice = _REVIEW_KEYS.get(self._show(main, 50))
-            if choice:
-                return choice
+            main = base.copy()
+            for b in buttons:
+                if b is armed and b.contains(self._mouse_pos):
+                    state = "pressed"
+                elif armed is None and b.contains(self._mouse_pos):
+                    state = "hover"
+                else:
+                    state = "normal"
+                b.draw(main, state)
+
+            key = self._show(main, 20)
+            if key in _REVIEW_KEYS:
+                return _REVIEW_KEYS[key]
+            while self._mouse_events:
+                kind, pt = self._mouse_events.popleft()
+                if kind == "down":
+                    armed = next((b for b in buttons if b.contains(pt)), None)
+                elif kind == "up":
+                    if armed is not None and armed.contains(pt):
+                        return armed.value
+                    armed = None
 
     def pick_endpoints(self, frame, header, reason=None, previous=None):
         """
@@ -305,7 +379,7 @@ class LabelerUI:
                    "Click the NEAR endpoint (finish line)",
                    "Enter = confirm"]
         points = []
-        self._click = None
+        self._mouse_events.clear()
         while True:
             main = base.copy()
             if previous is not None:
@@ -326,11 +400,11 @@ class LabelerUI:
             _put_centered(main, "Backspace / U = undo      Esc = cancel", MAIN_H - 16, 0.45, GREY, 1)
 
             key = self._show(main, 30)
-            if self._click is not None:
-                cx, cy = self._click
-                self._click = None
+            while self._mouse_events:
+                kind, (cx, cy) = self._mouse_events.popleft()
                 fx, fy = (cx - ox) / scale, (cy - oy) / scale
-                if len(points) < 2 and cx < MAIN_W and 0 <= fx < fw and 0 <= fy < fh:
+                if (kind == "down" and len(points) < 2 and cx < MAIN_W
+                        and 0 <= fx < fw and 0 <= fy < fh):
                     points.append((int(round(fx)), int(round(fy))))
             if key == KEY_ESC:
                 return None
