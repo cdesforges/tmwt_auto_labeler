@@ -54,7 +54,7 @@ python label.py --input_dir <videos_dir> [options]
 | `--backend`    |          | `mediapipe`                            | Pose backend. One of `mediapipe`, `mmpose`, `rtmlib`.                                                                    |
 | `--model`      |          | _(backend-specific)_                   | Pose model. Interpretation depends on the backend (see below).                                                           |
 | `--no_matte_crop` |       | _off (cropping enabled)_               | Disable automatic cropping of solid-color mattes (letterbox / pillarbox bars) around the active picture.                 |
-| `--endpoint_behavior` |  | `first_foot`                          | What ends the walk at the finish line: the first foot to cross it (`first_foot`) or the midpoint of the two ankles (`ankle_midpoint`). |
+| `--endpoint_behavior` |  | `first_foot`                          | What counts as crossing the start line (when one is clicked) and the finish line: the first foot to cross (`first_foot`) or the midpoint of the two ankles (`ankle_midpoint`). |
 | `--no_display` |          | _off (window + review enabled)_        | Run unattended: no window and no review. Automatic results are saved unreviewed; videos needing manual endpoints are reported as failed. |
 
 #### `--model` values by backend
@@ -187,9 +187,10 @@ takes no re-analysis.
 The walk timing is decided after each video has been fully analysed, so it can
 look back over the whole walk.
 
-The end is the moment the subject crosses the finish line (near endpoint): by
-default the first foot to cross it, or with `--endpoint_behavior ankle_midpoint`
-the midpoint of the two ankles. When the far endpoint is the subject's standing
+The end is the moment the subject crosses the finish line (near endpoint). Line
+crossings — the finish line, and the start line when one is clicked — count
+the first foot to cross by default, or the midpoint of the two ankles with
+`--endpoint_behavior ankle_midpoint`. When the far endpoint is the subject's standing
 position, the start is found by working backwards from that end:
 
 1. **Confirm the walk.** Find the sustained forward advance of the ankles that

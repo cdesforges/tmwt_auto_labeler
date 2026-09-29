@@ -57,12 +57,12 @@ def find_videos(input_dir):
                   if os.path.splitext(f)[1].lower() in VIDEO_EXTENSIONS)
 
 
-def make_jobs(videos, output_dir, end_behavior):
+def make_jobs(videos, output_dir, endpoint_behavior):
     """One VideoJob per video, with its CSV output path in `output_dir`."""
     return [VideoJob(path=v,
                      output_path=os.path.join(output_dir, os.path.splitext(os.path.basename(v))[0] + ".csv"),
                      name=os.path.basename(v),
-                     end_behavior=end_behavior)
+                     endpoint_behavior=endpoint_behavior)
             for v in videos]
 
 
@@ -286,9 +286,9 @@ def parse_args():
     parser.add_argument("--no_matte_crop", action="store_true",
                         help="Don't crop solid-colour mattes (letterbox / pillarbox bars).")
     parser.add_argument("--endpoint_behavior", choices=END_BEHAVIORS, default=END_FIRST_FOOT,
-                        help="What ends the walk at the finish line: the first foot to cross "
-                             "it (first_foot, default) or the midpoint of the two ankles "
-                             "(ankle_midpoint).")
+                        help="What counts as crossing the start line (when one is clicked) "
+                             "and the finish line: the first foot to cross (first_foot, "
+                             "default) or the midpoint of the two ankles (ankle_midpoint).")
     parser.add_argument("--no_display", action="store_true",
                         help="Run unattended: no window and no review. Automatic results "
                              "are saved unreviewed; videos that need manual endpoints "

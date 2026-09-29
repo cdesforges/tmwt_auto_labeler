@@ -2,12 +2,14 @@
 Walk timing: when the walk started and ended, decided after the whole video
 has been analysed.
 
-  - End: the first ankle to cross the near endpoint (the finish line), or with
-    job.end_behavior == END_ANKLE_MIDPOINT, the midpoint of the two ankles.
+  - End: the moment the subject crosses the near endpoint (the finish line).
   - Start: found in hindsight from the walk that leads into that end — the
     first movement of the first foot to leave its standstill (onset.py).
     If the user clicked the far endpoint as a start LINE and the subject stood
     behind it, the start is instead the moment they cross that line.
+
+Which body point crosses the lines is job.endpoint_behavior: the first ankle to
+cross (END_FIRST_FOOT, default) or the midpoint of the two ankles.
 
 Line crossings use t_along (position along the rope in image space, 0 = far,
 1 = near), smoothed with an EMA to suppress keypoint jitter.
@@ -88,9 +90,9 @@ def detect_walk_times(job):
         description of how the start was found.
     """
     times = [f.time_s for f in job.frames]
-    t_smooth = [f.t_smooth for f in job.frames]
+    lines = _Crossings(job, times)
 
-    first_end = _find_end(job, times, t_smooth)
+    first_end = lines.crossing(NEAR_T)
     start_move, info = _first_foot_movement(job, first_end)
     moved = (f"first {info['foot']} foot movement" if start_move is not None else "")
 
@@ -99,47 +101,62 @@ def detect_walk_times(job):
     else:
         # Clicked start line: if the subject was already on or past it when they
         # started moving, the movement is the start; otherwise they must cross it.
-        at_move = _value_at(times, t_smooth, start_move) if start_move is not None else None
+        at_move = lines.position_at(start_move) if start_move is not None else None
         if at_move is not None and at_move >= FAR_T:
             start, detail = start_move, moved + " (on/past start line)"
         else:
-            start = find_crossing(times, t_smooth, FAR_T, after=start_move)
+            start = lines.crossing(FAR_T, after=start_move)
             detail = "start-line crossing"
             if start is None and start_move is not None:
                 start, detail = start_move, moved
 
-    end = _find_end(job, times, t_smooth, after=start) if start is not None else None
+    end = lines.crossing(NEAR_T, after=start) if start is not None else None
+    rule = job.endpoint_behavior.replace("_", " ")
     if start is not None:
-        print(f"  Walk STARTED at {start:.3f}s ({detail})")
+        print(f"  Walk STARTED at {start:.3f}s ({detail}{', ' + rule if 'line' in detail else ''})")
     if end is not None:
-        print(f"  Walk FINISHED at {end:.3f}s ({job.end_behavior.replace('_', ' ')} at the finish line)")
+        print(f"  Walk FINISHED at {end:.3f}s ({rule} at the finish line)")
     return start, end, detail
 
 
-def _find_end(job, times, t_smooth, after=None):
+class _Crossings:
     """
-    When the walk ended: the first crossing of the finish line (at or after
-    `after`) by the first ankle, or by the ankle midpoint (job.end_behavior).
-    Falls back to the midpoint if neither ankle is ever seen crossing.
+    Line crossings by the body point job.endpoint_behavior names: the first of
+    the two ankles to cross (END_FIRST_FOOT), or their midpoint. Each series is
+    t_along smoothed with the same EMA. With END_FIRST_FOOT, falls back to the
+    midpoint when neither ankle is ever seen crossing.
     """
-    midpoint = find_crossing(times, t_smooth, NEAR_T, after=after)
-    if job.end_behavior == END_ANKLE_MIDPOINT:
-        return midpoint
-    feet = [t for t in (_foot_crossing(job, times, idx, after)
-                        for idx in (pose_common.LEFT_ANKLE_IDX, pose_common.RIGHT_ANKLE_IDX))
-            if t is not None]
-    return min(feet) if feet else midpoint
+
+    def __init__(self, job, times):
+        self.times = times
+        self.midpoint = [f.t_smooth for f in job.frames]
+        if job.endpoint_behavior == END_ANKLE_MIDPOINT:
+            self.series = [self.midpoint]
+        else:
+            self.series = [_ankle_series(job, idx)
+                           for idx in (pose_common.LEFT_ANKLE_IDX, pose_common.RIGHT_ANKLE_IDX)]
+
+    def crossing(self, level, after=None):
+        """First time the body point crosses `level` from below, at or after `after`."""
+        found = [t for t in (find_crossing(self.times, s, level, after) for s in self.series)
+                 if t is not None]
+        return min(found) if found else find_crossing(self.times, self.midpoint, level, after)
+
+    def position_at(self, time_s):
+        """The body point's smoothed t_along at `time_s` (the leading foot's, for first_foot)."""
+        values = [v for v in (_value_at(self.times, s, time_s) for s in self.series) if v is not None]
+        return max(values) if values else _value_at(self.times, self.midpoint, time_s)
 
 
-def _foot_crossing(job, times, ankle_idx, after):
-    """First finish-line crossing (at or after `after`) of one ankle, smoothed like t_along."""
+def _ankle_series(job, ankle_idx):
+    """One ankle's t_along in every frame, smoothed like the midpoint's (None where unseen)."""
     h, w = job.info.first_frame.shape[:2]
     values = []
     for f in job.frames:
         lm = f.pose[ankle_idx] if f.pose is not None else None
         px = pose_common.landmark_px(lm, w, h)
         values.append(metric.t_along(px, f.far_ep, f.near_ep) if px is not None else None)
-    return find_crossing(times, smooth_t_along(values), NEAR_T, after=after)
+    return smooth_t_along(values)
 
 
 def _first_foot_movement(job, end_time):

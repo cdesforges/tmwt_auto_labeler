@@ -473,7 +473,7 @@ class LabelerUI:
         bx, by = (MAIN_W - bar_w) // 2, cy + 20
         fraction = min(max(fraction, 0.0), 1.0)
         cv2.rectangle(main, (bx, by), (bx + bar_w, by + bar_h), (70, 70, 70), -1)
-        cv2.rectangle(main, (bx, by), (bx + int(bar_w * fraction), by + bar_h), YELLOW, -1)
+        cv2.rectangle(main, (bx, by), (bx + int(bar_w * fraction), by + bar_h), WHITE, -1)
         cv2.rectangle(main, (bx, by), (bx + bar_w, by + bar_h), GREY, 1)
         _put_centered(main, f"{fraction * 100:.0f}%", by + bar_h + 28, 0.55, WHITE, 1)
         value, _, _ = self._interact(main, buttons, 1)
