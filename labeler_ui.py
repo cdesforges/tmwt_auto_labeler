@@ -210,12 +210,13 @@ class Button:
     # Inset shadow lines along the top and left edges when pressed, outermost first.
     _SHADOW = ((0, 0, 0), (6, 6, 6), (12, 12, 12), (18, 18, 18), (24, 24, 24), (30, 30, 30))
 
-    def __init__(self, rect, text, value, keys=(), key_label=""):
+    def __init__(self, rect, text, value, keys=(), key_label="", icon=None):
         self.x, self.y, self.w, self.h = rect
         self.text = text
         self.value = value          # returned when chosen
         self.keys = keys            # key codes that also choose it
         self.key_label = key_label  # shortcut shown at the left; text is centred if empty
+        self.icon = icon            # draw this icon (see ICONS) instead of the text
 
     def contains(self, pt):
         return (pt is not None and self.x <= pt[0] < self.x + self.w
@@ -234,6 +235,9 @@ class Button:
             shift = 2
         cv2.rectangle(img, (x0, y0), (x1, y1), border, 1)
 
+        if self.icon:
+            _draw_icon(img, self.icon, (x0 + self.w // 2 + shift, y0 + self.h // 2 + shift))
+            return
         base_y = y0 + self.h // 2 + 7 + shift
         if self.key_label:
             cv2.putText(img, self.key_label, (x0 + 16 + shift, base_y), FONT, 0.6, YELLOW, 2, cv2.LINE_AA)
@@ -245,15 +249,62 @@ class Button:
 
 
 def button_row(specs, y):
-    """Buttons for `specs` (text, value, keys), side by side and centred at height y."""
-    widths = [max(_BTN_MIN_W, cv2.getTextSize(text, FONT, 0.6, 1)[0][0] + 48)
-              for text, _, _ in specs]
-    x = (MAIN_W - sum(widths) - _BTN_GAP * (len(specs) - 1)) // 2
+    """
+    Buttons for `specs`, side by side and centred at height y. A spec is
+    (text, value, keys), or (text, value, keys, icon) for an icon button (see
+    ICONS), which is drawn as that icon at a fixed width.
+    """
     buttons = []
-    for (text, value, keys), w in zip(specs, widths):
-        buttons.append(Button((x, y, w, BTN_H), text, value, keys))
-        x += w + _BTN_GAP
+    for spec in specs:
+        text, value, keys = spec[:3]
+        icon = spec[3] if len(spec) > 3 else None
+        w = _ICON_BTN_W if icon else max(_BTN_MIN_W, cv2.getTextSize(text, FONT, 0.6, 1)[0][0] + 48)
+        buttons.append(Button((0, y, w, BTN_H), text, value, keys, icon=icon))
+    x = (MAIN_W - sum(b.w for b in buttons) - _BTN_GAP * (len(buttons) - 1)) // 2
+    for b in buttons:
+        b.x = x
+        x += b.w + _BTN_GAP
     return buttons
+
+
+# Icon buttons: media-player symbols drawn with shapes (the font has none).
+ICONS = ("play", "pause", "prev_frame", "next_frame", "prev_video", "next_video")
+_ICON_BTN_W = 72
+
+
+def _draw_icon(img, icon, center, size=11, color=WHITE):
+    """Draw one of ICONS centred at `center`, about 2*size pixels tall."""
+    cx, cy = center
+    s = size
+
+    def triangle(tip_x, facing):
+        # A filled triangle whose tip is at tip_x, pointing right (+1) or left (-1).
+        base_x = tip_x - facing * int(1.6 * s)
+        pts = np.array([(tip_x, cy), (base_x, cy - s), (base_x, cy + s)], np.int32)
+        cv2.fillPoly(img, [pts], color, cv2.LINE_AA)
+
+    def bar(x):
+        cv2.rectangle(img, (x - 2, cy - s), (x + 1, cy + s), color, -1)
+
+    if icon == "play":
+        triangle(cx + int(0.8 * s), +1)
+    elif icon == "pause":
+        cv2.rectangle(img, (cx - s + 2, cy - s), (cx - 3, cy + s), color, -1)
+        cv2.rectangle(img, (cx + 3, cy - s), (cx + s - 2, cy + s), color, -1)
+    elif icon == "next_frame":                      # ▶|
+        triangle(cx + 4, +1)
+        bar(cx + 8)
+    elif icon == "prev_frame":                      # |◀
+        triangle(cx - 4, -1)
+        bar(cx - 8)
+    elif icon == "next_video":                      # ▶▶|
+        triangle(cx - 2, +1)
+        triangle(cx + 14, +1)
+        bar(cx + 18)
+    elif icon == "prev_video":                      # |◀◀
+        triangle(cx + 2, -1)
+        triangle(cx - 14, -1)
+        bar(cx - 18)
 
 
 def _bar_buttons(specs):
@@ -272,8 +323,18 @@ class JumpTo(Exception):
 class LabelerUI:
     """The batch window. All drawing, key polling and clicks go through here."""
 
-    def __init__(self, names):
+    def __init__(self, names, title="Videos", click_hint="click to review", legend=None):
+        """
+        Args:
+            names: file names listed in the sidebar.
+            title: sidebar heading (shown with the file count).
+            click_hint: shown beside the heading while files can be clicked.
+            legend: [(label, colour)] under the list; defaults to the review states.
+        """
         self.names = list(names)
+        self.title = title
+        self.click_hint = click_hint
+        self.legend = legend if legend is not None else _LEGEND
         self.states = [WAITING] * len(self.names)
         self.notes = [""] * len(self.names)
         self.reviewed = [None] * len(self.names)   # APPROVED_MARK / REJECTED_MARK once reviewed
@@ -327,9 +388,9 @@ class LabelerUI:
     def _sidebar(self):
         panel = np.full((MAIN_H, SIDEBAR_W, 3), _SIDEBAR_BG, dtype=np.uint8)
         x0 = 15
-        cv2.putText(panel, f"Videos ({len(self.names)})", (x0, 35), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
+        cv2.putText(panel, f"{self.title} ({len(self.names)})", (x0, 35), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
         if self.review_targets:
-            hint = "click to review"
+            hint = self.click_hint
             (tw, _), _ = cv2.getTextSize(hint, FONT, 0.4, 1)
             cv2.putText(panel, hint, (SIDEBAR_W - x0 - tw, 35), FONT, 0.4, GREY, 1, cv2.LINE_AA)
         cv2.line(panel, (x0, 48), (SIDEBAR_W - x0, 48), DIM, 1)
@@ -358,7 +419,7 @@ class LabelerUI:
         y = MAIN_H - _SIDEBAR_LEGEND_H + 20
         cv2.line(panel, (x0, y - 15), (SIDEBAR_W - x0, y - 15), DIM, 1)
         x = x0
-        for label, color in _LEGEND:
+        for label, color in self.legend:
             (tw, _), _ = cv2.getTextSize(label, FONT, 0.38, 1)
             if x + tw + 16 > SIDEBAR_W - x0:
                 x = x0
@@ -452,9 +513,10 @@ class LabelerUI:
                 state = "hover" if over and self._armed is None else "normal"
             b.draw(img, state)
 
-    def _handle_input(self, buttons, key):
+    def _handle_input(self, buttons, key, hotkeys=None):
         """
-        Apply a key and the queued mouse events to `buttons`.
+        Apply a key and the queued mouse events to `buttons`. `hotkeys` maps
+        extra keys (with no button) to values.
 
         Returns:
             (value, pressed_at, other_clicks): the chosen button's value (or
@@ -468,6 +530,8 @@ class LabelerUI:
         for b in buttons:
             if key in b.keys:
                 return b.value, now, []
+        if hotkeys and key in hotkeys:
+            return hotkeys[key], now, []
         chosen = pressed_at = None
         other_clicks = []
         events = self._window.mouse_events
@@ -495,11 +559,11 @@ class LabelerUI:
                 self._armed = None
         return chosen, pressed_at, other_clicks
 
-    def _interact(self, main, buttons, wait_ms):
+    def _interact(self, main, buttons, wait_ms, hotkeys=None):
         """Draw `buttons` over `main`, show it for up to wait_ms, and handle input."""
         img = main.copy()
         self._draw_buttons(img, buttons)
-        return self._handle_input(buttons, self._show(img, wait_ms))
+        return self._handle_input(buttons, self._show(img, wait_ms), hotkeys)
 
     def _wait_for_choice(self, main, buttons):
         """Show `main` with `buttons` until one is chosen; return its value."""
@@ -557,13 +621,14 @@ class LabelerUI:
             _put_centered(main, text, y, 0.55, GREY, 1)
         self._show(main, 1)
 
-    def show_frame(self, img, wait_ms, specs, label=None):
+    def show_frame(self, img, wait_ms, specs, label=None, hotkeys=None):
         """
         One playback frame above a bar of buttons, shown for up to wait_ms.
 
         Args:
             specs: button specs for the bar, (text, value, keys).
             label: optional text at the left of the bar (e.g. the mode).
+            hotkeys: optional {key: value} for keys with no button.
 
         Returns:
             (value, pressed_at): the chosen button's value or None, and when it
@@ -572,7 +637,7 @@ class LabelerUI:
         main, _, _, _ = _frame_screen(img)
         if label:
             cv2.putText(main, label, (16, MAIN_H - BAR_H // 2 + 6), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
-        value, pressed_at, _ = self._interact(main, _bar_buttons(specs), wait_ms)
+        value, pressed_at, _ = self._interact(main, _bar_buttons(specs), wait_ms, hotkeys)
         return value, pressed_at
 
     def start_playback(self):

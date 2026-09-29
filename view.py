@@ -7,23 +7,25 @@ with the same info panel as the labeler. The walk timing comes from the
 shows exactly what was approved at review. CSVs from before that file existed
 fall back to the start-line / finish-line crossings of t_along.
 
+It uses the labeler's window: every recording is listed in the sidebar
+(coloured by its saved result, with its walk time) and can be clicked to play
+it, with previous-recording, frame-back, play / pause, frame-forward and
+next-recording buttons below the picture. At the end of a recording the next one plays; after the last, playback
+pauses on its final frame. Close the window (or press Esc) to quit.
+
 Usage:
     python view.py --input_dir <output folder> [--no_content_crop]
 
 (The folder can also be given without --input_dir, as before.)
 
-Controls:
-    q       = next file (quits after the last one)
-    space   = pause / resume
-    left    = step back 1 frame (while paused)
-    right   = step forward 1 frame (while paused)
+Keys: Space = pause / play, Left / Right = step one frame, P / N = previous /
+next recording, Esc = quit.
 """
 
 import argparse
 import os
 import sys
 
-import cv2
 import numpy as np
 
 import annotate
@@ -31,12 +33,13 @@ import data_export
 import timing
 import video_io
 from job import COURSE_M
+from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ESC, KEY_SPACE, RED, UNREVIEWED,
+                        WAITING, WHITE, JumpTo, LabelerUI)
+from window import KEY_LEFT, KEY_RIGHT
 
-WINDOW = "TMWT Viewer"
-# Arrow-key codes from cv2.waitKey (Linux/Windows, macOS).
-KEYS_LEFT = (81, 2)
-KEYS_RIGHT = (83, 3)
-CONTROLS = "q=next  space=pause  <-/-> step"
+# Sidebar legend for the viewer.
+LEGEND = [("approved", GREEN), ("not reviewed", GREY), ("incomplete", RED),
+          ("no timing file", WHITE)]
 # Padding kept around the drawn content when cropping the view.
 CONTENT_MARGIN = 40
 # Fallback canvas size for CSVs without frame_w / frame_h.
@@ -112,58 +115,102 @@ def render_row(row, frame_w, frame_h, crop, walk_start, walk_end, file_name):
     canvas = canvas[y:y + h, x:x + w]
     panel = annotate.draw_info_panel(
         h, row.get("time_s") or 0.0, int(row.get("frame") or 0), row.get("t_along"),
-        walk_start, walk_end, title="TMWT Viewer", subtitle=file_name, controls=CONTROLS)
+        walk_start, walk_end, title="TMWT Viewer", subtitle=file_name)
     return np.hstack([canvas, panel])
 
 
-def play_csv(csv_path, crop_to_content=True):
-    """Play one CSV until it ends or the user presses q."""
-    file_name = os.path.basename(csv_path)
-    print(f"\n{'=' * 60}\nViewing: {file_name}\n{'=' * 60}")
+class Recording:
+    """One CSV loaded for playback: its rows, canvas size, walk timing and view crop."""
 
-    rows = data_export.read_frames_csv(csv_path)
-    if not rows:
+    def __init__(self, csv_path, crop_to_content=True):
+        self.name = os.path.basename(csv_path)
+        self.rows = data_export.read_frames_csv(csv_path)
+        first = self.rows[0] if self.rows else {}
+        self.frame_w = int(first.get("frame_w") or DEFAULT_FRAME_W)
+        self.frame_h = int(first.get("frame_h") or DEFAULT_FRAME_H)
+        self.walk_start, self.walk_end, self.source = walk_timing(csv_path, self.rows)
+        self.crop = (0, 0, self.frame_w, self.frame_h)
+        if crop_to_content and self.rows:
+            self.crop = content_bounds(self.rows, self.frame_w, self.frame_h)
+
+    def render(self, k):
+        """Frame k of the recording, drawn for the viewer."""
+        return render_row(self.rows[k], self.frame_w, self.frame_h, self.crop,
+                          self.walk_start, self.walk_end, self.name)
+
+    def time_at(self, k):
+        return self.rows[k].get("time_s") or 0.0
+
+    def describe(self):
+        """Console summary of the recording."""
+        print(f"\n{'=' * 60}\nViewing: {self.name}\n{'=' * 60}")
+        if self.walk_start is not None and self.walk_end is not None:
+            duration = self.walk_end - self.walk_start
+            print(f"  Walk time: {duration:.3f}s ({COURSE_M / duration:.2f} m/s) — {self.source}")
+        else:
+            print(f"  Walk timing incomplete — {self.source}")
+        print(f"  Frames: {len(self.rows)}, size: {self.frame_w}x{self.frame_h}")
+
+
+def sidebar_state(csv_path):
+    """(state, note) for a recording in the sidebar, from its saved timing file."""
+    saved = data_export.read_timing(csv_path)
+    if saved is None:
+        return WAITING, "no timing file (older CSV)"
+    duration = saved.get("duration_s")
+    if duration is None:
+        return FAILED, "timing incomplete"
+    reviewed = saved.get("review") == "approved"
+    return (DONE if reviewed else UNREVIEWED), f"{'approved' if reviewed else 'not reviewed'}  {duration:.2f}s"
+
+
+def play(ui, recording, index, count):
+    """
+    Play one recording in the window until the user moves to another.
+
+    Returns:
+        The index of the recording to play next, or None to quit. (Clicking a
+        recording in the sidebar raises JumpTo instead.)
+    """
+    recording.describe()
+    if not recording.rows:
         print("  No frame data found.")
-        return
-    frame_w = int(rows[0].get("frame_w") or DEFAULT_FRAME_W)
-    frame_h = int(rows[0].get("frame_h") or DEFAULT_FRAME_H)
-
-    walk_start, walk_end, source = walk_timing(csv_path, rows)
-    if walk_start is not None and walk_end is not None:
-        duration = walk_end - walk_start
-        print(f"  Walk time: {duration:.3f}s ({COURSE_M / duration:.2f} m/s) — {source}")
-    else:
-        print(f"  Walk timing incomplete — {source}")
-
-    crop = (0, 0, frame_w, frame_h)
-    if crop_to_content:
-        crop = content_bounds(rows, frame_w, frame_h)
-        if crop[2] < frame_w or crop[3] < frame_h:
-            print(f"  Cropping view to content: {crop[2]}x{crop[3]} at ({crop[0]},{crop[1]})")
-    print(f"  Frames: {len(rows)}, size: {frame_w}x{frame_h}")
-
+        return index + 1 if index + 1 < count else None
+    last = len(recording.rows) - 1
+    hotkeys = {KEY_LEFT: "back", KEY_RIGHT: "forward", KEY_ESC: "quit"}
+    ui.active = index
+    ui.start_playback()
     clock = video_io.PlaybackClock()
     paused = False
-    i = 0
-    while i < len(rows):
-        img = render_row(rows[i], frame_w, frame_h, crop, walk_start, walk_end, file_name)
-        cv2.imshow(WINDOW, img)
-        wait = 0 if paused else max(1, int(clock.ms_until(rows[i].get("time_s") or 0.0)))
-        key = cv2.waitKey(wait) & 0xFF
+    k = 0
+    while True:
+        specs = [("Previous recording", "previous", (ord("p"), ord("P")), "prev_video"),
+                 ("Back one frame", "back", (), "prev_frame"),
+                 ("Play" if paused else "Pause", "toggle", (KEY_SPACE,), "play" if paused else "pause"),
+                 ("Forward one frame", "forward", (), "next_frame"),
+                 ("Next recording", "next", (ord("n"), ord("N")), "next_video")]
+        wait = 50 if paused else clock.ms_until(recording.time_at(k))
+        value, _ = ui.show_frame(recording.render(k), wait, specs, hotkeys=hotkeys)
 
-        if key == ord("q"):
-            return
-        if key == ord(" "):
+        if value == "quit":
+            return None
+        if value == "previous":
+            return max(0, index - 1)
+        if value == "next":
+            return index + 1 if index + 1 < count else index
+        if value == "toggle":
             paused = not paused
             clock.restart()
-            continue
-        if paused:
-            if key in KEYS_LEFT:
-                i = max(0, i - 1)
-            elif key in KEYS_RIGHT:
-                i = min(len(rows) - 1, i + 1)
-            continue
-        i += 1
+        elif value in ("back", "forward"):
+            paused = True                     # stepping pauses playback
+            k = max(0, k - 1) if value == "back" else min(last, k + 1)
+        elif not paused:
+            if k < last:
+                k += 1
+            elif index + 1 < count:
+                return index + 1              # on to the next recording
+            else:
+                paused = True                 # the last one: hold on its final frame
 
 
 def main():
@@ -185,13 +232,23 @@ def main():
     csvs = find_csvs(args.input_dir)
     if not csvs:
         sys.exit(f"No CSV files found in '{args.input_dir}'.")
-    print(f"Found {len(csvs)} CSV file(s):")
-    for c in csvs:
-        print(f"  - {os.path.basename(c)}")
+    print(f"Found {len(csvs)} CSV file(s).")
 
-    for csv_path in csvs:
-        play_csv(csv_path, crop_to_content=not args.no_content_crop)
-    cv2.destroyAllWindows()
+    ui = LabelerUI([os.path.basename(c) for c in csvs], title="Recordings",
+                   click_hint="click to view", legend=LEGEND)
+    for i, csv_path in enumerate(csvs):
+        ui.set_state(i, *sidebar_state(csv_path))
+    ui.review_targets = set(range(len(csvs)))   # every recording can be clicked
+    try:
+        current = 0
+        while current is not None:
+            try:
+                current = play(ui, Recording(csvs[current], not args.no_content_crop),
+                               current, len(csvs))
+            except JumpTo as jump:
+                current = jump.index
+    finally:
+        ui.close()
     print("\nDone.")
 
 

@@ -30,6 +30,9 @@ KEY_NONE = 255
 # Key reported once the window has been closed or its process has gone away
 # (Esc: every screen treats it as cancel / quit).
 CLOSE_KEY = 27
+# Arrow keys, which have no character code; outside the 0-255 range of other keys.
+KEY_LEFT = 1001
+KEY_RIGHT = 1002
 
 _SERVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "window_server.py")
 

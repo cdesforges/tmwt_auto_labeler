@@ -336,13 +336,21 @@ python view.py --input_dir <output folder> [--no_content_crop]
 |---------------------|-------------------------|---------------------------------------------------------------------------------|
 | `--no_content_crop` | _off (cropping enabled)_| Show the full recorded frame instead of cropping to the drawn-content bounds.    |
 
-Playback controls:
+It uses the same window as the review: every recording in the folder is listed
+in the sidebar, coloured by its saved result (green approved, grey not
+reviewed, red incomplete timing, white an older CSV with no timing file) with
+its walk time. Click a recording to play it. The buttons below the picture:
 
-| Key      | Effect                                       |
-|----------|----------------------------------------------|
-| Space    | Pause / resume                               |
-| ← / →    | Step back / forward one frame (while paused) |
-| `q`      | Next file (quits after the last one)         |
+| Button | Key   | Effect |
+|--------|-------|--------|
+| `|◀◀`  | P     | Previous recording |
+| `|◀`   | ←     | Step back one frame (pauses) |
+| `▶` / `‖` | Space | Play / pause |
+| `▶|`   | →     | Step forward one frame (pauses) |
+| `▶▶|`  | N     | Next recording |
+
+At the end of a recording the next one plays; after the last, playback pauses on
+its final frame. Close the window (or press Esc) to quit.
 
 ---
 

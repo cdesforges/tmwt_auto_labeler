@@ -43,6 +43,8 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import numpy as np  # noqa: E402
 import pygame  # noqa: E402
 
+from window import CLOSE_KEY, KEY_LEFT, KEY_RIGHT  # noqa: E402  (constants only; no OpenCV)
+
 # Key codes sent for special keys; printable keys send their character code.
 _SPECIAL_KEYS = {
     pygame.K_RETURN: 13,
@@ -52,8 +54,9 @@ _SPECIAL_KEYS = {
     pygame.K_DELETE: 127,
     pygame.K_SPACE: 32,
     pygame.K_TAB: 9,
+    pygame.K_LEFT: KEY_LEFT,
+    pygame.K_RIGHT: KEY_RIGHT,
 }
-CLOSE_KEY = 27
 
 # Events that mean the window needs repainting at its (possibly new) size.
 _REPAINT_EVENTS = {pygame.VIDEORESIZE, pygame.VIDEOEXPOSE,
