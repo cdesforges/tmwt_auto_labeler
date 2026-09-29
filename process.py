@@ -4,13 +4,13 @@ TMWT processing — the slow part of the labeling, with no window, e.g. on a clu
 For every video in a folder: pose estimation (everyone in view) and camera-drift
 tracking over every frame, plus the ArUco finish marker. Each video's results
 are written to <folder>/tmwt_analysis/<video file name>.npz (see
-analysis_file.py). Then review them locally with review_videos.py.
+analysis_file.py). Then review them locally with review.py.
 
 Videos that already have a usable analysis file made with the same settings are
 skipped, so an interrupted run can simply be started again.
 
 Usage:
-    python process_videos.py --input_dir <videos folder>
+    python process.py --input_dir <videos folder>
                              [--backend {mediapipe,mmpose,rtmlib}] [--model <name>]
                              [--device {auto,cpu,cuda,mps}] [--no_matte_crop]
                              [--reprocess] [--download_models]

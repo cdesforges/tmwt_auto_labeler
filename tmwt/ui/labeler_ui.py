@@ -3,28 +3,34 @@ The labeler's single window. Nothing else in the labeler opens a window, and
 every choice the user makes is a clickable button (most also have an optional
 keyboard shortcut).
 
-Screens are drawn with OpenCV into a fixed-size canvas (MAIN_W + SIDEBAR_W by
-MAIN_H) and shown in a resizable window (window.py), which scales the canvas
-to fit and reports mouse positions in canvas pixels. So all layout and
-hit-testing here is in canvas pixels, whatever size the window is.
+Screens are drawn with OpenCV into a fixed-size canvas and shown in a
+resizable window (window.py), which scales the canvas to fit and reports mouse
+positions in canvas pixels. The canvas is made of panels (panel.py):
 
-Two regions:
-  - Main area (left): analysis progress, real-time playback, endpoint picking,
-    the review prompt and messages.
-  - Sidebar (right): every video in the batch, colour-coded by state:
-      white  = waiting
-      yellow = being analysed / reviewed / saved
-      green  = done (automatic timing found, or approved at review)
-      orange = needs your input at review (e.g. endpoints must be clicked)
-      red    = failed or rejected
-      grey   = saved without review
+    +--------------------------------------------------+
+    |  top bar (top_bar.py): quit, save, title, logo    |
+    +-------------------------------+------------------+
+    |  main area (MAIN_W x MAIN_H): |  sidebar         |
+    |  progress, playback, endpoint |  (sidebar.py):   |
+    |  picking, the review prompt,  |  every video,    |
+    |  messages                     |  colour-coded    |
+    +-------------------------------+------------------+
 
-Drawing building blocks (colours, buttons, icons, the seek bar) are in
-widgets.py; playback controls are in player.py.
+Screens draw the main area and lay out its buttons in main-area pixels; this
+class adds the top bar and sidebar, and converts mouse positions to the right
+panel's pixels. Drawing building blocks (colours, buttons, icons, the seek bar)
+are in widgets.py; playback controls are in player.py.
 
-During review, files in `review_targets` can be clicked in the sidebar. The
-click raises JumpTo from whatever screen is showing, so the caller (label.py)
-can switch to reviewing that file.
+Leaving a screen other than through its own buttons raises an exception from
+whatever screen is showing:
+  - JumpTo: a file in `review_targets` was clicked in the sidebar.
+  - UserQuit and its subclasses: the user asked to stop —
+      WindowClosed      the window was closed (or the top bar's X clicked
+                        outside a review);
+      SaveAndQuit       "save progress and quit", from the top bar (save icon,
+                        or X then "Save progress & quit") during a review;
+      QuitWithoutSaving the top bar's X, then "Quit without saving".
+The caller (review_session.py) decides what each means for the review.
 """
 
 import time
@@ -33,32 +39,19 @@ import cv2
 import numpy as np
 
 from tmwt.pose import pose_common
-from tmwt.ui.widgets import (BAR_H, BTN_H, DIM, FONT, GREEN, GREY, HEADER_H, KEY_BACKSPACE,
-                     KEY_ENTER, KEY_ESC, MAIN_H, MAIN_W, ORANGE, RED, WHITE, YELLOW, BLUE,
-                     SEEK_H, Button, bar_buttons, button_row, dimmed, draw_seek_bar,
-                     frame_screen, on_seek_bar, put_centered, seek_fraction, truncate)
+from tmwt.ui import top_bar
+from tmwt.ui.panel import Panel
+from tmwt.ui.sidebar import DEFAULT_LEGEND, Sidebar, SIDEBAR_W
+from tmwt.ui.top_bar import TOPBAR_H, TopBar
+from tmwt.ui.widgets import (BAR_H, BTN_H, FONT, GREY, HEADER_H, KEY_BACKSPACE, KEY_ENTER,
+                             KEY_ESC, MAIN_H, MAIN_W, ORANGE, RED, WHITE, YELLOW, BLUE, SEEK_H,
+                             KeyedButton, bar_buttons, button_row, dimmed, draw_buttons,
+                             draw_seek_bar, draw_tooltip, frame_screen, on_seek_bar,
+                             put_centered, seek_fraction)
 from tmwt.ui.window import Window
 
 WINDOW = "TMWT Labeler"
-SIDEBAR_W = 320
-
-# Sidebar states and their colours.
-WAITING = "waiting"
-WORKING = "working"
-DONE = "done"
-NEEDS_INPUT = "needs_input"
-FAILED = "failed"
-UNREVIEWED = "unreviewed"
-STATE_COLORS = {
-    WAITING: WHITE,
-    WORKING: YELLOW,
-    DONE: GREEN,
-    NEEDS_INPUT: ORANGE,
-    FAILED: RED,
-    UNREVIEWED: GREY,
-}
-_LEGEND = [("waiting", WHITE), ("working", YELLOW), ("done", GREEN),
-           ("needs input", ORANGE), ("failed", RED)]
+CANVAS_W, CANVAS_H = MAIN_W + SIDEBAR_W, TOPBAR_H + MAIN_H
 
 # Review prompt options: (shortcut label, text, value, keys).
 REVIEW_OPTIONS = [
@@ -68,7 +61,6 @@ REVIEW_OPTIONS = [
     ("4", "Skip this file", "skip", (ord("4"),)),
     ("R", "Replay", "replay", (ord("r"), ord("R"))),
     ("F", "Finish review (save results)", "quit", (ord("f"), ord("F"))),
-    ("Esc", "Save progress and quit (continue later)", "save_quit", (KEY_ESC,)),
 ]
 # Offered on the review prompt only when more than one person was tracked.
 WRONG_PERSON_OPTION = ("5", "Wrong person tracked (pick the walker)", "person", (ord("5"),))
@@ -76,54 +68,12 @@ WRONG_PERSON_OPTION = ("5", "Wrong person tracked (pick the walker)", "person", 
 # Colours for telling people apart on the "pick the walker" screen.
 PERSON_COLORS = [(0, 255, 0), (255, 160, 0), (255, 0, 255), (0, 200, 255), (60, 60, 255)]
 
-# Review outcomes shown in the sidebar (LabelerUI.mark_reviewed): approved but
-# not yet saved (grey check), approved and saved to disk (green check), skipped
-# (red cross).
-APPROVED_MARK = "approved"
-SAVED_MARK = "saved"
-REJECTED_MARK = "rejected"
-# Width kept free at the right of a reviewed row for its mark.
-_MARK_W = 26
-_SIDEBAR_BG = 25
-# How much reviewed rows are faded toward the background (0 = not at all).
-_REVIEWED_FADE = 0.55
-
-# Sidebar layout, and how many rows one scroll-wheel notch moves.
-_SIDEBAR_TOP = 62
-_SIDEBAR_ROW_H = 42
-_SIDEBAR_LEGEND_H = 70
-_SCROLL_ROWS_PER_NOTCH = 1.0
-
 # Minimum interval between progress redraws, so drawing never slows analysis.
 _PROGRESS_REDRAW_S = 0.07
 # Brightness of a background frame behind text.
 _DIM_PROGRESS = 0.3
 _DIM_MESSAGE = 0.25
 _DIM_PROMPT = 0.12
-
-
-# --- Sidebar drawing helpers ---------------------------------------------------
-
-def _dim(color):
-    """A colour faded toward the sidebar background, for reviewed rows."""
-    return tuple(int(c + (_SIDEBAR_BG - c) * _REVIEWED_FADE) for c in color)
-
-
-def _draw_mark(img, outcome, center):
-    """A check (grey: approved, green: saved) or a red cross (rejected) centred at `center`."""
-    x, y = center
-    if outcome in (APPROVED_MARK, SAVED_MARK):
-        color = GREEN if outcome == SAVED_MARK else GREY
-        cv2.polylines(img, [np.array([(x - 7, y), (x - 2, y + 5), (x + 8, y - 6)], np.int32)],
-                      False, color, 2, cv2.LINE_AA)
-    else:
-        cv2.line(img, (x - 6, y - 6), (x + 6, y + 6), RED, 2, cv2.LINE_AA)
-        cv2.line(img, (x - 6, y + 6), (x + 6, y - 6), RED, 2, cv2.LINE_AA)
-
-
-
-class WindowClosed(Exception):
-    """The user closed the window. Raised from any screen so the program can stop cleanly."""
 
 
 class JumpTo(Exception):
@@ -134,191 +84,135 @@ class JumpTo(Exception):
         self.index = index
 
 
+class UserQuit(Exception):
+    """Base class: the user asked to stop, from any screen."""
+
+
+class WindowClosed(UserQuit):
+    """The window was closed (or the top bar's X clicked outside a review)."""
+
+
+class SaveAndQuit(UserQuit):
+    """During a review: save the review progress and stop, to continue later."""
+
+
+class QuitWithoutSaving(UserQuit):
+    """During a review: stop and discard the review progress."""
+
+
 class LabelerUI:
     """The batch window. All drawing, key polling and clicks go through here."""
 
-    def __init__(self, names, title="Videos", click_hint="click to review", legend=None):
+    def __init__(self, names, title="Videos", click_hint="click to review", legend=None,
+                 heading=""):
         """
         Args:
             names: file names listed in the sidebar.
             title: sidebar heading (shown with the file count).
-            click_hint: shown beside the heading while files can be clicked.
+            click_hint: shown beside the sidebar heading while files can be clicked.
             legend: [(label, colour)] under the list; defaults to the review states.
+            heading: the top bar's title (e.g. the folder's name).
         """
-        self.names = list(names)
-        self.title = title
-        self.click_hint = click_hint
-        self.legend = legend if legend is not None else _LEGEND
-        self.states = [WAITING] * len(self.names)
-        self.notes = [""] * len(self.names)
-        self.reviewed = [None] * len(self.names)   # APPROVED_MARK / REJECTED_MARK once reviewed
-        self._active = None           # index of the highlighted file, or None
-        self._scroll_first = None     # first sidebar row shown; None = follow the active file
+        self.top_bar = TopBar(CANVAS_W, heading)
+        self.main = Panel(0, TOPBAR_H, MAIN_W, MAIN_H)
+        self.sidebar = Sidebar(MAIN_W, TOPBAR_H, MAIN_H, names, title, click_hint,
+                               legend if legend is not None else DEFAULT_LEGEND)
+        self.dialogs_shown = 0        # counts pop-up dialogs, so playback can re-sync after one
         self._last_progress_draw = 0.0
         self._armed = None            # value of the button the mouse is pressed on
         self._armed_at = None         # when that press happened (perf_counter)
-        self._wheel_accum = 0.0       # sidebar scroll not yet applied (fractional rows)
-        self.review_targets = set()   # files that can be clicked in the sidebar (see JumpTo)
         self._armed_row = None        # sidebar row the mouse was pressed on
         self._seeking = False         # the seek bar is being dragged
-        self._window = Window(WINDOW, MAIN_W + SIDEBAR_W, MAIN_H)
+        self._in_dialog = False
+        self._last_main = None        # the main area last shown (a dialog's background)
+        self._window = Window(WINDOW, CANVAS_W, CANVAS_H)
 
-    # --- Sidebar ---------------------------------------------------------------
+    # --- Sidebar and top bar state ---------------------------------------------
 
     @property
     def active(self):
         """Index of the highlighted file, or None."""
-        return self._active
+        return self.sidebar.active
 
     @active.setter
     def active(self, i):
-        # A new active file brings the list back to following it.
-        if i != self._active:
-            self._scroll_first = None
-        self._active = i
+        self.sidebar.active = i
+
+    @property
+    def review_targets(self):
+        """Files that can be clicked in the sidebar (see JumpTo)."""
+        return self.sidebar.review_targets
+
+    @review_targets.setter
+    def review_targets(self, targets):
+        self.sidebar.review_targets = set(targets)
+
+    @property
+    def states(self):
+        return self.sidebar.states
+
+    @property
+    def notes(self):
+        return self.sidebar.notes
 
     def set_state(self, i, state, note=""):
         """Set file i's sidebar state (WAITING, WORKING, ...) and its note line."""
-        self.states[i] = state
-        self.notes[i] = note
+        self.sidebar.set_state(i, state, note)
 
     def mark_reviewed(self, i, outcome):
-        """Record file i's review outcome (APPROVED_MARK / SAVED_MARK / REJECTED_MARK); it moves to "Reviewed"."""
-        self.reviewed[i] = outcome
+        """Record file i's review outcome (see sidebar.py); it moves to "Reviewed"."""
+        self.sidebar.mark_reviewed(i, outcome)
 
-    def _display_rows(self):
+    @property
+    def in_review(self):
         """
-        The sidebar's rows, top to bottom: ("file", index) or ("header", text).
-        Once any file has been reviewed, the list splits into an "Unreviewed"
-        section and a "Reviewed" section below it; until then it's one list.
+        True while a review is open: the top bar shows the save button, and its
+        X asks whether to save the review progress before quitting.
         """
-        files = range(len(self.names))
-        if not any(self.reviewed):
-            return [("file", i) for i in files]
-        todo = [i for i in files if not self.reviewed[i]]
-        done = [i for i in files if self.reviewed[i]]
-        return ([("header", f"Unreviewed ({len(todo)})")] + [("file", i) for i in todo]
-                + [("header", f"Reviewed ({len(done)})")] + [("file", i) for i in done])
+        return self.top_bar.show_save
 
-    def _sidebar(self):
-        panel = np.full((MAIN_H, SIDEBAR_W, 3), _SIDEBAR_BG, dtype=np.uint8)
-        x0 = 15
-        cv2.putText(panel, f"{self.title} ({len(self.names)})", (x0, 35), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
-        if self.review_targets:
-            hint = self.click_hint
-            (tw, _), _ = cv2.getTextSize(hint, FONT, 0.4, 1)
-            cv2.putText(panel, hint, (SIDEBAR_W - x0 - tw, 35), FONT, 0.4, GREY, 1, cv2.LINE_AA)
-        cv2.line(panel, (x0, 48), (SIDEBAR_W - x0, 48), DIM, 1)
-        hovered = self._sidebar_row_at(self._window.mouse_pos)
-
-        rows = self._display_rows()
-        top, row_h = _SIDEBAR_TOP, _SIDEBAR_ROW_H
-        visible = self._sidebar_rows()
-        first = self._sidebar_first()
-        for n, (kind, value) in enumerate(rows[first:first + visible]):
-            y = top + n * row_h
-            if kind == "header":
-                cv2.putText(panel, value.upper(), (x0, y + 22), FONT, 0.42, GREY, 1, cv2.LINE_AA)
-                cv2.line(panel, (x0, y + 30), (SIDEBAR_W - x0, y + 30), (60, 60, 60), 1)
-                continue
-            self._draw_file_row(panel, value, y, hovered)
-
-        if len(rows) > visible:
-            # Scrollbar: the thumb's size and position show which part of the list is in view.
-            track_top, track_h = top - 4, visible * row_h
-            thumb_h = max(20, track_h * visible // len(rows))
-            thumb_y = track_top + (track_h - thumb_h) * first // (len(rows) - visible)
-            cv2.rectangle(panel, (SIDEBAR_W - 6, track_top), (SIDEBAR_W - 3, track_top + track_h), (45, 45, 45), -1)
-            cv2.rectangle(panel, (SIDEBAR_W - 6, thumb_y), (SIDEBAR_W - 3, thumb_y + thumb_h), DIM, -1)
-
-        y = MAIN_H - _SIDEBAR_LEGEND_H + 20
-        cv2.line(panel, (x0, y - 15), (SIDEBAR_W - x0, y - 15), DIM, 1)
-        x = x0
-        for label, color in self.legend:
-            (tw, _), _ = cv2.getTextSize(label, FONT, 0.38, 1)
-            if x + tw + 16 > SIDEBAR_W - x0:
-                x = x0
-                y += 20
-            cv2.circle(panel, (x + 4, y - 4), 4, color, -1)
-            cv2.putText(panel, label, (x + 12, y), FONT, 0.38, GREY, 1, cv2.LINE_AA)
-            x += tw + 26
-        return panel
-
-    def _draw_file_row(self, panel, i, y, hovered):
-        """One file's row: highlight, name (in its state colour) and note; reviewed rows dimmed with a mark."""
-        x0, row_h = 15, _SIDEBAR_ROW_H
-        box = ((5, y - 4), (SIDEBAR_W - 5, y + row_h - 8))
-        if i == self.active:
-            cv2.rectangle(panel, *box, (55, 55, 55), -1)
-        elif i == hovered and i in self.review_targets:
-            cv2.rectangle(panel, *box, (40, 40, 40) if self._armed_row == i else (45, 45, 45), -1)
-            cv2.rectangle(panel, *box, DIM, 1)
-
-        outcome = self.reviewed[i]
-        name_color, note_color = STATE_COLORS[self.states[i]], GREY
-        if outcome and i != self.active:
-            name_color, note_color = _dim(name_color), _dim(note_color)
-        text_w = SIDEBAR_W - 2 * x0 - (_MARK_W if outcome else 0)
-        cv2.putText(panel, truncate(f"{i + 1}. {self.names[i]}", text_w, 0.5),
-                    (x0, y + 14), FONT, 0.5, name_color, 1, cv2.LINE_AA)
-        if self.notes[i]:
-            cv2.putText(panel, truncate(self.notes[i], text_w - 12, 0.4),
-                        (x0 + 12, y + 31), FONT, 0.4, note_color, 1, cv2.LINE_AA)
-        if outcome:
-            _draw_mark(panel, outcome, (SIDEBAR_W - x0 - 10, y + 12))
-
-    def _sidebar_rows(self):
-        """How many rows fit in the sidebar."""
-        return max(1, (MAIN_H - _SIDEBAR_TOP - _SIDEBAR_LEGEND_H) // _SIDEBAR_ROW_H)
-
-    def _sidebar_first(self):
-        """Index of the first row shown: the user's scroll position, or centred on the active file."""
-        rows = self._display_rows()
-        visible = self._sidebar_rows()
-        last_start = max(0, len(rows) - visible)
-        if self._scroll_first is not None:
-            return min(max(0, self._scroll_first), last_start)
-        if self._active is None:
-            return 0
-        pos = rows.index(("file", self._active))
-        return min(max(0, pos - visible // 2), last_start)
-
-    def _sidebar_row_at(self, pt):
-        """Index of the file whose sidebar row is at canvas point `pt`, or None (headers too)."""
-        if pt is None or pt[0] < MAIN_W:
-            return None
-        row = (pt[1] - (_SIDEBAR_TOP - 4)) // _SIDEBAR_ROW_H
-        if not 0 <= row < self._sidebar_rows():
-            return None
-        rows = self._display_rows()
-        n = self._sidebar_first() + row
-        return rows[n][1] if n < len(rows) and rows[n][0] == "file" else None
-
-    def _apply_scrolling(self):
-        """Scroll the sidebar by any wheel / trackpad movement made over it."""
-        while self._window.wheel_events:
-            dy, pos = self._window.wheel_events.popleft()
-            if pos is not None and pos[0] >= MAIN_W:
-                self._wheel_accum -= dy * _SCROLL_ROWS_PER_NOTCH
-        rows = int(self._wheel_accum)
-        if rows:
-            self._wheel_accum -= rows
-            self._scroll_first = self._sidebar_first() + rows
+    @in_review.setter
+    def in_review(self, value):
+        self.top_bar.show_save = bool(value)
 
     # --- Showing a screen and handling input -----------------------------------
 
+    def _mouse(self, panel):
+        """The pointer in `panel`'s pixels (it may be outside the panel), or None."""
+        return panel.to_local(self._window.mouse_pos)
+
+    def _compose(self, main):
+        """The whole canvas: the top bar over the main area `main` and the sidebar."""
+        pos = self._window.mouse_pos
+        bar = self.top_bar.render(self.top_bar.local_if_inside(pos), self._armed)
+        side = self.sidebar.render(self.sidebar.local_if_inside(pos), self._armed_row)
+        canvas = np.vstack([bar, np.hstack([main, side])])
+        hovered = self.top_bar.hovered_button(self.top_bar.local_if_inside(pos))
+        if hovered is not None and self._armed is None:
+            draw_tooltip(canvas, hovered.text, (hovered.x, hovered.y + hovered.h))
+        return canvas
+
     def _show(self, main, wait_ms):
         """
-        Display `main` + sidebar and wait up to wait_ms for a key (window.KEY_NONE if none).
+        Display `main` with the top bar and sidebar, and wait up to wait_ms for
+        a key (window.KEY_NONE if none).
 
         Raises:
             WindowClosed: the user closed the window.
         """
-        self._window.show(np.hstack([main, self._sidebar()]))
+        self._last_main = main
+        self._window.show(self._compose(main))
+        return self._poll(wait_ms)
+
+    def _poll(self, wait_ms):
+        """Wait up to wait_ms for a key, then apply sidebar scrolling."""
         key = self._window.poll(wait_ms)
         if self._window.closed:
             raise WindowClosed()
-        self._apply_scrolling()
+        while self._window.wheel_events:
+            dy, pos = self._window.wheel_events.popleft()
+            if self.sidebar.contains(pos):
+                self.sidebar.scroll(dy)
         return key
 
     def _new_screen(self):
@@ -327,28 +221,29 @@ class LabelerUI:
         self._armed = self._armed_at = self._armed_row = None
         self._seeking = False
 
-    def _draw_buttons(self, img, buttons):
-        for b in buttons:
-            over = b.contains(self._window.mouse_pos)
-            if self._armed == b.value:
-                state = "pressed" if over else "normal"
-            else:
-                state = "hover" if over and self._armed is None else "normal"
-            b.draw(img, state)
+    def _button_at(self, buttons, pt):
+        """The button at canvas point `pt`: a top bar button, or one of the main area's `buttons`."""
+        bar_pt = self.top_bar.local_if_inside(pt)
+        if bar_pt is not None:
+            return next((b for b in self.top_bar.buttons if b.contains(bar_pt)), None)
+        main_pt = self.main.local_if_inside(pt)
+        return next((b for b in buttons if b.contains(main_pt)), None)
 
     def _handle_input(self, buttons, key, hotkeys=None, seek_bar=False):
         """
-        Apply a key and the queued mouse events to `buttons`. `hotkeys` maps
-        extra keys (with no button) to values. With `seek_bar`, a press on the
-        seek bar starts a drag (self._seeking) and the release ends it.
+        Apply a key and the queued mouse events to `buttons` (main-area
+        pixels), the top bar and the sidebar. `hotkeys` maps extra keys (with no
+        button) to values. With `seek_bar`, a press on the seek bar starts a
+        drag (self._seeking) and the release ends it.
 
         Returns:
             (value, pressed_at, other_clicks): the chosen button's value (or
-            None), when it was pressed (perf_counter), and mouse presses that
-            didn't land on a button or a clickable sidebar row (canvas pixels).
+            None), when it was pressed (perf_counter), and presses in the main
+            area that didn't land on a button (main-area pixels).
 
         Raises:
             JumpTo: a file in review_targets was clicked in the sidebar.
+            UserQuit: the user quit from the top bar (see the module docs).
         """
         now = time.perf_counter()
         for b in buttons:
@@ -361,12 +256,13 @@ class LabelerUI:
         events = self._window.mouse_events
         while events:
             kind, pt = events.popleft()
-            if seek_bar and (self._seeking or (kind == "down" and on_seek_bar(pt))):
+            main_pt = self.main.to_local(pt)
+            if seek_bar and (self._seeking or (kind == "down" and on_seek_bar(main_pt))):
                 self._seeking = kind == "down"
                 if kind == "up":
-                    chosen = ("seek_end", seek_fraction(pt[0]))
+                    chosen = ("seek_end", seek_fraction(main_pt[0]))
                 continue
-            row = self._sidebar_row_at(pt)
+            row = self.sidebar.row_at(self.sidebar.local_if_inside(pt))
             if row is not None and row in self.review_targets:
                 # A sidebar file: clicked when released on the row it was pressed on.
                 if kind == "down":
@@ -376,22 +272,67 @@ class LabelerUI:
                     raise JumpTo(row)
                 continue
             self._armed_row = None if kind == "up" else self._armed_row
-            hit = next((b for b in buttons if b.contains(pt)), None)
+            hit = self._button_at(buttons, pt)
             if kind == "down":
-                if hit is None:
-                    other_clicks.append(pt)
+                if hit is None and self.main.contains(pt):
+                    other_clicks.append(main_pt)
                 self._armed = hit.value if hit else None
                 self._armed_at = now
             elif kind == "up":
-                if (chosen is None and hit is not None and self._armed == hit.value):
+                if chosen is None and hit is not None and self._armed == hit.value:
+                    self._armed = None
+                    if hit.value in (top_bar.CLOSE, top_bar.SAVE):
+                        self._top_bar_clicked(hit.value)
+                        continue
                     chosen, pressed_at = hit.value, self._armed_at
                 self._armed = None
         return chosen, pressed_at, other_clicks
 
+    def _top_bar_clicked(self, value):
+        """
+        The top bar's X or save button was clicked.
+
+        Raises:
+            UserQuit: unless the user cancelled the quit dialog.
+        """
+        if value == top_bar.SAVE:
+            raise SaveAndQuit()
+        if not self.in_review:
+            raise WindowClosed()
+        if self._in_dialog:
+            return   # X on the quit dialog itself: nothing more to ask
+        self._ask_quit()
+
+    def _ask_quit(self):
+        """
+        "Quit the review?" dialog over the current screen. Returns if the user
+        cancels (the screen underneath carries on).
+
+        Raises:
+            SaveAndQuit, QuitWithoutSaving: the user's choice.
+        """
+        self._in_dialog = True
+        try:
+            choice = self.show_message([
+                ("Quit the review?", WHITE),
+                ("Save your progress to continue this review later,", GREY),
+                ("or quit without saving to discard its decisions.", GREY),
+            ], [("Save progress & quit", "save", KEY_ENTER),
+                ("Quit without saving", "discard", ()),
+                ("Cancel", "cancel", (KEY_ESC,))], background=self._last_main, dim=0.35)
+        finally:
+            self._in_dialog = False
+            self.dialogs_shown += 1
+            self._new_screen()
+        if choice == "save":
+            raise SaveAndQuit()
+        if choice == "discard":
+            raise QuitWithoutSaving()
+
     def _interact(self, main, buttons, wait_ms, hotkeys=None, seek_bar=False):
         """Draw `buttons` over `main`, show it for up to wait_ms, and handle input."""
         img = main.copy()
-        self._draw_buttons(img, buttons)
+        draw_buttons(img, buttons, self._mouse(self.main), self._armed)
         return self._handle_input(buttons, self._show(img, wait_ms), hotkeys, seek_bar)
 
     def _wait_for_choice(self, main, buttons):
@@ -421,11 +362,7 @@ class LabelerUI:
         buttons = button_row([("Cancel", "cancel", (KEY_ESC,))], MAIN_H - 90) if cancellable else []
         now = time.perf_counter()
         if not force and now - self._last_progress_draw < _PROGRESS_REDRAW_S:
-            key = self._window.poll(0)
-            if self._window.closed:
-                raise WindowClosed()
-            value, _, _ = self._handle_input(buttons, key)
-            self._apply_scrolling()
+            value, _, _ = self._handle_input(buttons, self._poll(0))
             return value == "cancel"
         self._last_progress_draw = now
 
@@ -475,26 +412,27 @@ class LabelerUI:
         if label:
             cv2.putText(main, label, (16, MAIN_H - BAR_H // 2 + 6), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
         if seek:
-            fraction = seek_fraction(self._window.mouse_pos[0]) if self._seeking else seek[0]
-            active = self._seeking or on_seek_bar(self._window.mouse_pos)
+            mouse = self._mouse(self.main)
+            fraction = seek_fraction(mouse[0]) if self._seeking else seek[0]
+            active = self._seeking or on_seek_bar(mouse)
             draw_seek_bar(main, fraction, seek[1], seek[2], active)
         value, pressed_at, _ = self._interact(main, bar_buttons(specs), wait_ms, hotkeys,
                                               seek_bar=bool(seek))
         if value is None and self._seeking:
-            value = ("seek", seek_fraction(self._window.mouse_pos[0]))
+            value = ("seek", seek_fraction(self._mouse(self.main)[0]))
         return value, pressed_at
 
     def start_playback(self):
         """Call before a playback loop so clicks from the previous screen are ignored."""
         self._new_screen()
 
-    def show_message(self, lines, specs, background=None):
+    def show_message(self, lines, specs, background=None, dim=_DIM_MESSAGE):
         """
-        A centered message over an optional dimmed background, with a row of
-        buttons below it. `lines` is a list of (text, colour); the first is the
-        title. Returns the chosen button's value.
+        A centered message over an optional background dimmed to `dim`, with a
+        row of buttons below it. `lines` is a list of (text, colour); the first
+        is the title. Returns the chosen button's value.
         """
-        main = dimmed(background, _DIM_MESSAGE)
+        main = dimmed(background, dim)
         y = MAIN_H // 2 - 18 * len(lines) - 30
         for k, (text, color) in enumerate(lines):
             put_centered(main, text, y, 0.8 if k == 0 else 0.55, color, 2 if k == 0 else 1)
@@ -509,7 +447,7 @@ class LabelerUI:
         """
         options = list(REVIEW_OPTIONS)
         if wrong_person:
-            options.insert(-2, WRONG_PERSON_OPTION)   # before Replay and Quit
+            options.insert(-2, WRONG_PERSON_OPTION)   # before Replay and Finish
         main = dimmed(background, _DIM_PROMPT)
         y = 100 if wrong_person else 110
         put_centered(main, "Was the detection successful?", y, 0.9, WHITE, 2)
@@ -522,8 +460,8 @@ class LabelerUI:
         btn_w, gap = 560, 10
         buttons = []
         for key_label, text, value, keys in options:
-            buttons.append(Button(((MAIN_W - btn_w) // 2, y, btn_w, BTN_H), text, value,
-                                  keys, key_label=f"[{key_label}]"))
+            buttons.append(KeyedButton(((MAIN_W - btn_w) // 2, y, btn_w, BTN_H), text, value,
+                                       keys, key_label=f"[{key_label}]"))
             y += BTN_H + gap
         if note:
             put_centered(main, note, y + 18, 0.55, ORANGE, 1)
@@ -600,7 +538,7 @@ class LabelerUI:
                 finish, placing = None, "finish"
             for cx, cy in clicks:
                 fx, fy = (cx - ox) / scale, (cy - oy) / scale
-                if placing is None or cx >= MAIN_W or not (0 <= fx < fw and 0 <= fy < fh):
+                if placing is None or not (0 <= fx < fw and 0 <= fy < fh):
                     continue
                 point = (int(round(fx)), int(round(fy)))
                 if placing == "start":

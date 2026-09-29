@@ -1,14 +1,21 @@
 """
 Drawing building blocks for the labeler's window (labeler_ui.py) and players:
-layout sizes, colours, key codes, text and image helpers, buttons (text or
-icon), and the seek bar.
+layout sizes, colours, key codes, text and image helpers, buttons, icons,
+tooltips and the seek bar.
 
 Everything is drawn with OpenCV into the fixed-size main-area canvas
 (MAIN_W x MAIN_H); window.py scales it to the real window. Buttons are described
 by specs, (text, value, keys) or (text, value, keys, icon): the label, the value
 returned when chosen, the key codes that also choose it, and an optional icon
 (see ICONS) drawn instead of the text.
+
+Buttons share one base class (Button: hit-testing and the normal / hover /
+pressed look) and differ only in what they draw on top: TextButton (centred
+label), KeyedButton (shortcut at the left, then the label) and IconButton (an
+icon; its text is shown as a tooltip).
 """
+
+import unicodedata
 
 import cv2
 import numpy as np
@@ -57,6 +64,44 @@ def truncate(text, max_w, scale, thickness=1):
     while text and cv2.getTextSize(text + "...", FONT, scale, thickness)[0][0] > max_w:
         text = text[:-1]
     return text + "..."
+
+
+def ascii_text(text):
+    """
+    `text` in characters OpenCV's font can draw: accents are dropped
+    (e.g. "é" -> "e") and anything else unprintable becomes "?".
+    """
+    text = unicodedata.normalize("NFKD", str(text))
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return "".join(c if " " <= c <= "~" else "?" for c in text)
+
+
+def truncate_middle(text, max_w, scale, thickness=1):
+    """
+    Shorten `text` by replacing its middle with '...' until it fits in max_w
+    pixels, keeping the start and the end (where names usually differ, e.g.
+    "control_vids_cluster_version_test2" -> "control_vi...ersion_test2").
+    Returns "" if not even '...' fits.
+    """
+    def width(t):
+        return cv2.getTextSize(t, FONT, scale, thickness)[0][0]
+
+    if width(text) <= max_w:
+        return text
+    if width("...") > max_w:
+        return ""
+    # Keep the longest total of characters that fits, split evenly with the
+    # extra one at the start.
+    lo, hi = 0, len(text) - 1
+    while lo < hi:
+        keep = (lo + hi + 1) // 2
+        head, tail = (keep + 1) // 2, keep // 2
+        if width(text[:head] + "..." + text[len(text) - tail:]) <= max_w:
+            lo = keep
+        else:
+            hi = keep - 1
+    head, tail = (lo + 1) // 2, lo // 2
+    return text[:head] + "..." + text[len(text) - tail:]
 
 
 def fit(img, w, h):
@@ -136,10 +181,13 @@ def draw_seek_bar(img, fraction, markers, text, active):
 
 class Button:
     """
-    A clickable button drawn with OpenCV, behaving like a standard UI button:
-    it highlights on hover, looks pushed in (inset shadow, label shifted) while
-    held, and only counts as clicked if the mouse is released over it. Dragging
-    off before releasing cancels the click; dragging back on re-arms it.
+    Base class for clickable buttons drawn with OpenCV, behaving like a standard
+    UI button: it highlights on hover, looks pushed in (inset shadow, content
+    shifted) while held, and only counts as clicked if the mouse is released
+    over it. Dragging off before releasing cancels the click; dragging back on
+    re-arms it.
+
+    Subclasses draw their content in _draw_content.
     """
 
     # Fill / border colours per visual state.
@@ -151,13 +199,11 @@ class Button:
     # Inset shadow lines along the top and left edges when pressed, outermost first.
     _SHADOW = ((0, 0, 0), (6, 6, 6), (12, 12, 12), (18, 18, 18), (24, 24, 24), (30, 30, 30))
 
-    def __init__(self, rect, text, value, keys=(), key_label="", icon=None):
+    def __init__(self, rect, text, value, keys=()):
         self.x, self.y, self.w, self.h = rect
         self.text = text
         self.value = value          # returned when chosen
         self.keys = keys            # key codes that also choose it
-        self.key_label = key_label  # shortcut shown at the left; text is centred if empty
-        self.icon = icon            # draw this icon (see ICONS) instead of the text
 
     def contains(self, pt):
         return (pt is not None and self.x <= pt[0] < self.x + self.w
@@ -175,18 +221,81 @@ class Button:
                 cv2.line(img, (x0 + k, y0 + k), (x0 + k, y1), shade, 1)
             shift = 2
         cv2.rectangle(img, (x0, y0), (x1, y1), border, 1)
+        self._draw_content(img, shift)
 
-        if self.icon:
-            draw_icon(img, self.icon, (x0 + self.w // 2 + shift, y0 + self.h // 2 + shift))
-            return
-        base_y = y0 + self.h // 2 + 7 + shift
-        if self.key_label:
-            cv2.putText(img, self.key_label, (x0 + 16 + shift, base_y), FONT, 0.6, YELLOW, 2, cv2.LINE_AA)
-            text_x = x0 + 80
-        else:
-            (tw, _), _ = cv2.getTextSize(self.text, FONT, 0.6, 1)
-            text_x = x0 + (self.w - tw) // 2
-        cv2.putText(img, self.text, (text_x + shift, base_y), FONT, 0.6, WHITE, 1, cv2.LINE_AA)
+    def _draw_content(self, img, shift):
+        """Draw what's on the button, moved down and right by `shift` while pressed."""
+        raise NotImplementedError
+
+    def _baseline(self, shift):
+        return self.y + self.h // 2 + 7 + shift
+
+
+class TextButton(Button):
+    """A button with its label centred."""
+
+    def _draw_content(self, img, shift):
+        (tw, _), _ = cv2.getTextSize(self.text, FONT, 0.6, 1)
+        x = self.x + (self.w - tw) // 2 + shift
+        cv2.putText(img, self.text, (x, self._baseline(shift)), FONT, 0.6, WHITE, 1, cv2.LINE_AA)
+
+
+class KeyedButton(Button):
+    """A button with its keyboard shortcut at the left (e.g. "[1]") and the label after it."""
+
+    def __init__(self, rect, text, value, keys=(), key_label=""):
+        super().__init__(rect, text, value, keys)
+        self.key_label = key_label
+
+    def _draw_content(self, img, shift):
+        y = self._baseline(shift)
+        cv2.putText(img, self.key_label, (self.x + 16 + shift, y), FONT, 0.6, YELLOW, 2, cv2.LINE_AA)
+        cv2.putText(img, self.text, (self.x + 80 + shift, y), FONT, 0.6, WHITE, 1, cv2.LINE_AA)
+
+
+class IconButton(Button):
+    """A button showing one of ICONS; its text is the tooltip (see draw_tooltip)."""
+
+    def __init__(self, rect, text, value, keys=(), icon="play", icon_size=11):
+        super().__init__(rect, text, value, keys)
+        self.icon = icon
+        self.icon_size = icon_size
+
+    def _draw_content(self, img, shift):
+        center = (self.x + self.w // 2 + shift, self.y + self.h // 2 + shift)
+        draw_icon(img, self.icon, center, self.icon_size)
+
+
+def button_state(button, mouse, armed):
+    """
+    How `button` should look: "pressed" while the mouse is held down on it
+    (`armed` is its value) and still over it, "hover" while the mouse is over
+    it and nothing is held, else "normal". `mouse` is in the button's pixels.
+    """
+    over = button.contains(mouse)
+    if armed == button.value:
+        return "pressed" if over else "normal"
+    return "hover" if over and armed is None else "normal"
+
+
+def draw_buttons(img, buttons, mouse, armed):
+    """Draw `buttons` on `img`, each in its state (see button_state)."""
+    for b in buttons:
+        b.draw(img, button_state(b, mouse, armed))
+
+
+def draw_tooltip(img, text, anchor):
+    """
+    A small label with `text` just below `anchor` (x, y), e.g. under a hovered
+    icon button, kept inside `img`.
+    """
+    scale, pad = 0.45, 6
+    (tw, th), _ = cv2.getTextSize(text, FONT, scale, 1)
+    x = min(max(2, anchor[0]), img.shape[1] - tw - 2 * pad - 2)
+    y = anchor[1] + 4
+    cv2.rectangle(img, (x, y), (x + tw + 2 * pad, y + th + 2 * pad), (15, 15, 15), -1)
+    cv2.rectangle(img, (x, y), (x + tw + 2 * pad, y + th + 2 * pad), DIM, 1)
+    cv2.putText(img, text, (x + pad, y + pad + th), FONT, scale, WHITE, 1, cv2.LINE_AA)
 
 
 def button_row(specs, y):
@@ -199,8 +308,11 @@ def button_row(specs, y):
     for spec in specs:
         text, value, keys = spec[:3]
         icon = spec[3] if len(spec) > 3 else None
-        w = _ICON_BTN_W if icon else max(_BTN_MIN_W, cv2.getTextSize(text, FONT, 0.6, 1)[0][0] + 48)
-        buttons.append(Button((0, y, w, BTN_H), text, value, keys, icon=icon))
+        if icon:
+            buttons.append(IconButton((0, y, _ICON_BTN_W, BTN_H), text, value, keys, icon=icon))
+        else:
+            w = max(_BTN_MIN_W, cv2.getTextSize(text, FONT, 0.6, 1)[0][0] + 48)
+            buttons.append(TextButton((0, y, w, BTN_H), text, value, keys))
     x = (MAIN_W - sum(b.w for b in buttons) - _BTN_GAP * (len(buttons) - 1)) // 2
     for b in buttons:
         b.x = x
@@ -208,8 +320,9 @@ def button_row(specs, y):
     return buttons
 
 
-# Icon buttons: media-player symbols drawn with shapes (the font has none).
-ICONS = ("play", "pause", "prev_frame", "next_frame", "prev_video", "next_video")
+# Icons, drawn with shapes (the font has no symbols): media-player controls,
+# plus close (an X) and save (a floppy disk) for the top bar.
+ICONS = ("play", "pause", "prev_frame", "next_frame", "prev_video", "next_video", "close", "save")
 _ICON_BTN_W = 72
 
 
@@ -246,6 +359,22 @@ def draw_icon(img, icon, center, size=11, color=WHITE):
         triangle(cx + 2, -1)
         triangle(cx - 14, -1)
         bar(cx - 18)
+    elif icon == "close":                           # X
+        d = int(0.75 * s)
+        cv2.line(img, (cx - d, cy - d), (cx + d, cy + d), color, 2, cv2.LINE_AA)
+        cv2.line(img, (cx - d, cy + d), (cx + d, cy - d), color, 2, cv2.LINE_AA)
+    elif icon == "save":                            # floppy disk
+        # Body with a clipped top-right corner, the metal shutter at the top
+        # and the label at the bottom.
+        body = np.array([(cx - s, cy - s), (cx + s - 4, cy - s), (cx + s, cy - s + 4),
+                         (cx + s, cy + s), (cx - s, cy + s)], np.int32)
+        cv2.fillPoly(img, [body], color, cv2.LINE_AA)
+        dark = (40, 40, 40)
+        cv2.rectangle(img, (cx - s + 5, cy - s), (cx + s - 7, cy - s + 7), dark, -1)
+        cv2.rectangle(img, (cx + s - 12, cy - s + 1), (cx + s - 9, cy - s + 5), color, -1)
+        cv2.rectangle(img, (cx - s + 4, cy + 1), (cx + s - 4, cy + s - 3), dark, -1)
+    else:
+        raise ValueError(f"unknown icon {icon!r}")
 
 
 def bar_buttons(specs):

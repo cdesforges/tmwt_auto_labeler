@@ -3,7 +3,7 @@ Phase 1 of a run: analyse one video without any user input, in two parts.
 
 process_video is the slow part: every person's pose and the camera-drift
 homography in every frame (job.FrameResult), plus the ArUco finish marker. It
-can run on a cluster (process_videos.py); its results are saved to an analysis
+can run on a cluster (process.py); its results are saved to an analysis
 file (analysis_file.py).
 
 interpret is the fast part, run wherever the review happens: people are linked

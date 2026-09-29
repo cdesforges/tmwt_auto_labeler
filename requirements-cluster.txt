@@ -1,4 +1,4 @@
-# For process_videos.py on a cluster (no window). Use the same OpenCV version as
+# For process.py on a cluster (no window). Use the same OpenCV version as
 # on the machine you review on, so both decode the videos identically.
 numpy
 opencv-python-headless

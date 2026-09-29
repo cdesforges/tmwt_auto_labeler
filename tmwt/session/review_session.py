@@ -3,7 +3,7 @@ The review session: load each video's analysis file and interpret it, then,
 with a window, let the user review the videos, save their outputs and write the
 report; without one, save the automatic results unreviewed.
 
-Used by review_videos.py (analysis files made elsewhere, e.g. on a cluster) and
+Used by review.py (analysis files made elsewhere, e.g. on a cluster) and
 label.py (processing and review in one go).
 """
 
@@ -18,8 +18,9 @@ from tmwt.session import review_progress
 from tmwt.core.job import (REVIEW_APPROVED, REVIEW_REJECTED, REVIEW_UNREVIEWED, STATUS_FAILED,
                  STATUS_INCOMPLETE, STATUS_NEEDS_INPUT, STATUS_NO_BODY, STATUS_OK,
                  VideoJob)
-from tmwt.ui.labeler_ui import (APPROVED_MARK, DONE, FAILED, NEEDS_INPUT, REJECTED_MARK, SAVED_MARK,
-                        UNREVIEWED, WORKING, JumpTo, WindowClosed)
+from tmwt.ui.labeler_ui import JumpTo, QuitWithoutSaving, SaveAndQuit, WindowClosed
+from tmwt.ui.sidebar import (APPROVED_MARK, DONE, FAILED, NEEDS_INPUT, REJECTED_MARK, SAVED_MARK,
+                             UNREVIEWED, WORKING)
 from tmwt.ui.widgets import GREEN, GREY, KEY_ENTER, KEY_ESC, ORANGE, RED, WHITE
 
 
@@ -59,24 +60,34 @@ def run(jobs, ui, output_dir, review_first=True):
     the report; with a window, finish on a summary screen.
 
     With a window, an unfinished earlier review of the folder can be continued
-    (review_progress.py). After reviewing, the user confirms saving first; exiting
-    without saving, or closing the window, keeps the review progress for next
-    time.
+    (review_progress.py). After reviewing, the user confirms saving first. The
+    top bar can stop the review at any point: "save progress and quit" (or
+    closing the window) keeps the review progress for next time, and "quit
+    without saving" discards it; neither writes any outputs.
 
     Raises:
         WindowClosed: the user closed the window (progress is saved first).
     """
     if ui is not None and review_first:
         try:
-            if not _review(jobs, ui):
-                print("\nReview progress saved; no outputs written yet. Run the review "
-                      "again to continue where you left off (or start over).")
-                return
+            _review(jobs, ui)
+        except SaveAndQuit:
+            review_progress.save(jobs, ui.active)
+            print("\nReview progress saved; no outputs written yet. Run the review "
+                  "again to continue where you left off (or start over).")
+            return
+        except QuitWithoutSaving:
+            review_progress.clear(jobs)
+            print("\nQuit without saving: this review's decisions were discarded and "
+                  "no outputs were written.")
+            return
         except WindowClosed:
             review_progress.save(jobs, ui.active)
             print("\nWindow closed. Your review progress is kept: run the review "
                   "again to continue where you left off, or start over.")
             raise
+        finally:
+            ui.in_review = False
     save_outputs(jobs, ui)
     if ui is not None:
         review_progress.clear(jobs)
@@ -87,8 +98,9 @@ def run(jobs, ui, output_dir, review_first=True):
 
 def _review(jobs, ui):
     """
-    The interactive part: continue or start the review, review, then confirm.
-    Returns True to save the outputs.
+    The interactive part: continue or start the review, review, then confirm
+    saving. Returns once the outputs should be saved; stopping early raises
+    UserQuit (see run).
     """
     progress = review_progress.load(jobs)
     if progress is not None and ask_resume(ui, progress):
@@ -105,10 +117,11 @@ def _review(jobs, ui):
         review_progress.clear(jobs)
         first = ask_to_review(ui, jobs)
         if first is None:
-            return True   # "Save all without reviewing"
-    if first is not None and run_review(jobs, ui, first) == review.SAVE_AND_QUIT:
-        return False
-    return confirm_save(jobs, ui)
+            return   # "Save all without reviewing"
+    ui.in_review = True   # the top bar can now save the progress and quit
+    if first is not None:
+        run_review(jobs, ui, first)
+    confirm_save(jobs, ui)
 
 
 def ask_resume(ui, progress):
@@ -204,12 +217,10 @@ def ask_to_review(ui, jobs):
 
 def confirm_save(jobs, ui):
     """
-    "Review complete" screen: what will be saved, with Save results and Save
-    progress and quit (no outputs written; the review can be continued later).
-    Clicking a video in the sidebar reviews just that video, then returns here.
-
-    Returns:
-        True to save.
+    "Review complete" screen: what will be saved, and Save results. Clicking a
+    video in the sidebar reviews just that video, then returns here. (The top
+    bar can still save the progress and quit instead.) Returns when the user
+    chooses to save.
     """
     while True:
         counts = {}
@@ -229,15 +240,13 @@ def confirm_save(jobs, ui):
         ui.active = None
         ui.review_targets = set(reviewable(jobs))
         try:
-            choice = ui.show_message(lines, [("Save results", "save", KEY_ENTER),
-                                             ("Save progress and quit", "exit", (KEY_ESC,))])
+            ui.show_message(lines, [("Save results", "save", KEY_ENTER)])
         except JumpTo as jump:
-            if run_review(jobs, ui, jump.index, only_one=True) == review.SAVE_AND_QUIT:
-                return False
+            run_review(jobs, ui, jump.index, only_one=True)
             continue
         finally:
             ui.review_targets = set()
-        return choice == "save"
+        return
 
 
 def run_review(jobs, ui, first, only_one=False):
@@ -253,10 +262,6 @@ def run_review(jobs, ui, first, only_one=False):
 
     With only_one, stop after the first decision (used when changing one video
     from the "Review complete" screen).
-
-    Returns:
-        review.QUIT or review.SAVE_AND_QUIT if the user stopped the review,
-        else None.
     """
     ui.review_targets = set(reviewable(jobs))
     current = first
@@ -275,9 +280,9 @@ def run_review(jobs, ui, first, only_one=False):
                 current = jump.index
                 continue
             review_progress.save(jobs, current)       # after every decision
-            if result in (review.QUIT, review.SAVE_AND_QUIT):
-                print("  Review stopped by user.")
-                return result
+            if result == review.QUIT:
+                print("  Review finished by user.")
+                return
             current = None if only_one else next_unreviewed(jobs, current)
     finally:
         ui.review_targets = set()

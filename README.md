@@ -15,12 +15,12 @@ skeleton-only playback for review.
 
 Labeling has two steps, which can run on different machines:
 
-1. **Process** — `process_videos.py`: pose estimation and camera tracking for every
+1. **Process** — `process.py`: pose estimation and camera tracking for every
    video, with no window. This is the slow part (about 1.4× the video's length
    per video with rtmlib on Apple Silicon), so it can run on a cluster. Each
    video's results are written to `<videos folder>/tmwt_analysis/<video>.npz`
    (coordinates only, no images; about 100 KB per video).
-2. **Review** — `review_videos.py`: run locally on the same folder (copy the
+2. **Review** — `review.py`: run locally on the same folder (copy the
    videos and the `tmwt_analysis/` folder back). It works out the subject,
    endpoints and timing in seconds, opens the review window, and writes the
    outputs and the report. It needs no pose model.
@@ -30,10 +30,10 @@ processed yet, so running it again on a folder goes straight to review.
 
 ```bash
 # On the cluster (or any machine)
-python process_videos.py --input_dir /data/session1
+python process.py --input_dir /data/session1
 
 # Locally, with the videos and tmwt_analysis/ copied back
-python review_videos.py --input_dir media/session1
+python review.py --input_dir media/session1
 
 # Or both at once, locally
 python label.py --input_dir media/session1
@@ -44,7 +44,7 @@ Things to know:
 - **Same videos.** Review checks each video against a fingerprint saved at
   processing, and refuses a video that differs ("re-process it"). The folder's
   path can differ between machines.
-- **Resuming.** `process_videos.py` skips videos that already have an analysis
+- **Resuming.** `process.py` skips videos that already have an analysis
   file made with the same backend, model and matte setting, so an interrupted
   run can be restarted. `--reprocess` forces everything to run again.
 - **Same OpenCV version.** Review re-reads frames and must see the same frames as
@@ -52,7 +52,7 @@ Things to know:
 - **Cluster results vs. local.** A GPU or CPU gives very slightly different
   numbers from CoreML on a Mac, which can shift timings a little. Worth one
   check on a few videos processed both ways.
-- **No internet on compute nodes?** Run `python process_videos.py --download_models`
+- **No internet on compute nodes?** Run `python process.py --download_models`
   once on a node that has internet. rtmlib caches models in `$TORCH_HOME/hub`, else
   `$XDG_CACHE_HOME/rtmlib/hub`, else `~/.cache/rtmlib/hub`; point these at a shared
   folder if home directories aren't shared.
@@ -68,7 +68,7 @@ An example SLURM job for one folder:
 ##SBATCH --gres=gpu:1          # uncomment for a GPU node (with onnxruntime-gpu)
 source ~/tmwt/.venv/bin/activate
 cd ~/tmwt
-python process_videos.py --input_dir /data/session1 --device auto
+python process.py --input_dir /data/session1 --device auto
 ```
 
 ---
@@ -109,7 +109,7 @@ accurate.
 
 ## Usage
 
-### `process_videos.py`
+### `process.py`
 
 | Flag                | Default              | Description |
 |---------------------|----------------------|-------------|
@@ -121,7 +121,7 @@ accurate.
 | `--reprocess`       | _off_                | Process every video, even ones already processed. |
 | `--download_models` | _off_                | Only download / load the pose model, then exit. |
 
-### `review_videos.py`
+### `review.py`
 
 | Flag                  | Default              | Description |
 |-----------------------|----------------------|-------------|
@@ -174,7 +174,7 @@ matte cropping existed. Pass `--no_content_crop` to see the full recorded frame.
 ## How a run works
 
 A `label.py` run processes every video in `--input_dir` in four phases, all in
-one resizable window. (`review_videos.py` starts at the review, loading the
+one resizable window. (`review.py` starts at the review, loading the
 analysis files instead of analysing.)
 Every choice is an on-screen button: a click counts when the mouse is released
 over the same button it was pressed on. Most buttons also have a keyboard
@@ -182,6 +182,16 @@ shortcut, shown on the button. The right-hand sidebar lists every file (scroll
 it with the mouse wheel or trackpad when there are many),
 colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
 **green** done, **orange** needs your input at review, **red** failed or rejected.
+
+The **top bar** is always there: an **X** at the top left, then (during a
+review) a **save** button (floppy disk); the folder's name in the middle
+(shortened in the middle if it's long); the RNA Institute logo at the right.
+
+- **Save** (floppy disk): save your review progress and quit, from any screen.
+- **X**: quit. During a review it asks first: **Save progress & quit**, **Quit
+  without saving** (discards this review's decisions), or **Cancel** (carry on
+  where you were). Outside a review it quits straight away, like closing the
+  window.
 
 1. **Analyse (unattended).** The pose model loads first (a few seconds, shown
    in the window). Then each video in turn: find the rope endpoints, run
@@ -213,18 +223,21 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
    | Skip this file (`4`) | The file is skipped: no outputs are written, and it's reported as rejected. |
    | Replay (`R`) | Play the video again. |
    | Finish review (`F`) | Go to the **Review complete** screen now; videos not reviewed yet keep their automatic results, marked unreviewed. |
-   | Save progress and quit (Esc) | Stop and come back later: your decisions so far are saved, no outputs are written, and the next review of the folder offers to continue. |
+
+   To stop and come back later, use the top bar's **save** button (or **X**,
+   then **Save progress & quit**): your decisions so far are saved, no outputs
+   are written, and the next review of the folder offers to continue.
 
 3. **Save.** Once every video is reviewed (or you choose **Finish review**), a
    **Review complete** screen shows what will be saved. **Save results** writes
    the outputs of every video that wasn't skipped, in one go, with a progress
-   bar; **Save progress and quit** writes nothing yet and keeps your review
+   bar; the top bar's **save** button writes nothing yet and keeps your review
    progress for next time. Click a video in the sidebar to change it first; you
    come back to this screen afterwards. Nothing is written during review, so
    there's no wait between videos.
    **Stopping part-way.** Review progress is saved as you go (after every
    decision and whenever you switch video) to `tmwt_analysis/review_progress.json`.
-   If you choose **Save progress and quit** or close the window, the next review of the
+   If you save your progress and quit (top bar) or close the window, the next review of the
    folder asks whether to **Continue** where you left off (reopening the video
    you were on) or **Start over**. The file is deleted once the outputs are
    saved. Progress for a video that has since been replaced or re-processed is
@@ -373,14 +386,15 @@ The four scripts you run are at the top level; everything else is in the
 `tmwt/` package, grouped by what it does.
 
 ```
-process_videos.py         # Step 1 (e.g. on a cluster): processing, writes tmwt_analysis/*.npz
-review_videos.py          # Step 2 (locally): review from the analysis files
+process.py                # Step 1 (e.g. on a cluster): processing, writes tmwt_analysis/*.npz
+review.py                 # Step 2 (locally): review from the analysis files
 label.py                  # Both steps in one go, locally
 view.py                   # Skeleton-only playback of saved CSVs
 
 media/                    # Input videos (not tracked by git)
 models/                   # MediaPipe model file (the default --model path)
-assets/                   # ArUco marker specification
+assets/                   # ArUco marker specification; RNA Institute logo for the top bar
+tests/                    # Unit tests: python -m unittest discover tests
 runs/                     # Output folders from earlier runs (data, not code)
 
 tmwt/
@@ -414,8 +428,11 @@ tmwt/
   ui/                     # The window and what's drawn in it
     window.py             #   The window as the program sees it: show a canvas, poll for input
     window_server.py      #   The window process: resizable pygame window
-    labeler_ui.py         #   The labeler's screens, sidebar and input handling
-    widgets.py            #   Colours, key codes, buttons, icons and the seek bar
+    labeler_ui.py         #   The labeler's screens and input handling; quit / save exceptions
+    panel.py              #   Panel: a region of the window (base of the top bar and sidebar)
+    top_bar.py            #   Top bar: quit and save buttons, folder title, logo
+    sidebar.py            #   Sidebar: the colour-coded file list, its states and marks
+    widgets.py            #   Colours, key codes, buttons (Button and subclasses), icons, tooltips, the seek bar
     player.py             #   Playback controls shared by the review and the viewer
     annotate.py           #   Frame drawing (skeleton, rope, info panel)
 ```

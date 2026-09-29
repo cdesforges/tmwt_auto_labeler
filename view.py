@@ -34,7 +34,9 @@ from tmwt.ui import annotate
 from tmwt.core import data_export
 from tmwt.measurement import timing
 from tmwt.core.job import COURSE_M
-from tmwt.ui.labeler_ui import DONE, FAILED, UNREVIEWED, WAITING, JumpTo, LabelerUI, WindowClosed
+from tmwt.ui.labeler_ui import JumpTo, LabelerUI, WindowClosed
+from tmwt.ui.sidebar import DONE, FAILED, UNREVIEWED, WAITING
+from tmwt.ui.top_bar import folder_title
 from tmwt.ui.player import Player
 from tmwt.ui.widgets import GREEN, GREY, KEY_ESC, RED, WHITE
 
@@ -223,7 +225,8 @@ def main():
     print(f"Found {len(csvs)} CSV file(s).")
 
     ui = LabelerUI([os.path.basename(c) for c in csvs], title="Recordings",
-                   click_hint="click to view", legend=LEGEND)
+                   click_hint="click to view", legend=LEGEND,
+                   heading=folder_title(args.input_dir))
     for i, csv_path in enumerate(csvs):
         ui.set_state(i, *sidebar_state(csv_path))
     ui.review_targets = set(range(len(csvs)))   # every recording can be clicked

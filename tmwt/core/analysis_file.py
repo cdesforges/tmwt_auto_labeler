@@ -1,7 +1,7 @@
 """
 Analysis files: the slow part of the analysis (analysis.process_video), saved so
-the review can happen later or elsewhere — process_videos.py on a cluster, then
-review_videos.py locally.
+the review can happen later or elsewhere — process.py on a cluster, then
+review.py locally.
 
 One file per video, next to the videos:
 
@@ -148,7 +148,7 @@ def load(job):
     """
     path = analysis_path(job.path)
     if not os.path.exists(path):
-        raise AnalysisFileError("not processed yet (run process_videos.py)")
+        raise AnalysisFileError("not processed yet (run process.py)")
     with np.load(path) as data:
         meta = json.loads(str(data["meta"]))
         if meta.get("format_version") != FORMAT_VERSION:

@@ -1,5 +1,5 @@
 """
-Playback shared by the review (review.py) and the viewer (view.py).
+Playback shared by the review (session/review.py) and the viewer (view.py).
 
 A Player keeps the position in a clip (frame index k), whether it's paused, and
 real-time pacing, and handles the transport controls: frame back / play-pause /
@@ -119,8 +119,11 @@ class Player:
             wait_ms = _PAUSED_MS if self.paused else self._clock.ms_until(self.times[self.k])
         self._shown.append((time.perf_counter(), self.times[self.k]))
         keys = {KEY_LEFT: "back", KEY_RIGHT: "forward", **(hotkeys or {})}
+        dialogs = ui.dialogs_shown
         value, pressed_at = ui.show_frame(image, wait_ms, specs, label, hotkeys=keys,
                                           seek=seek_state(self.times, self.k, marks))
+        if ui.dialogs_shown != dialogs:
+            self._clock.restart()                    # a dialog paused everything: carry on from here
         if self._apply(value):
             self._hold = True                        # show the new position before moving on
             return None, pressed_at

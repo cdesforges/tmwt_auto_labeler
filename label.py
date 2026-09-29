@@ -3,10 +3,10 @@ TMWT Labeler — processing and review in one go, locally.
 
 This is the local shortcut for the two-step workflow:
 
-  1. Process (processing.py, as process_videos.py does, e.g. on a cluster):
+  1. Process (processing.py, as process.py does, e.g. on a cluster):
      pose estimation and tracking for every video that isn't processed yet,
      written to <folder>/tmwt_analysis/, with progress in the window.
-  2. Review (review_session.py, as review_videos.py does): load the analysis
+  2. Review (review_session.py, as review.py does): load the analysis
      files, work out the subject, endpoints and timing, review each video,
      save the outputs and write the report.
 
@@ -34,6 +34,7 @@ from tmwt.detection import processing
 from tmwt.session import review_session
 from tmwt.core.job import END_BEHAVIORS, END_FIRST_FOOT
 from tmwt.ui.labeler_ui import LabelerUI, WindowClosed
+from tmwt.ui.top_bar import folder_title
 from tmwt.pose.pose_backend import BACKENDS, DEVICES, get_backend
 
 
@@ -87,7 +88,8 @@ def main():
     output_dir = args.output_dir or os.path.join(args.input_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
 
-    ui = None if args.no_display else LabelerUI([os.path.basename(v) for v in videos])
+    ui = None if args.no_display else LabelerUI([os.path.basename(v) for v in videos],
+                                                heading=folder_title(args.input_dir))
     try:
         cancelled = processing.process_all(videos, backend, args.backend, model_path,
                                            matte_crop=not args.no_matte_crop,

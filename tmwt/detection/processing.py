@@ -3,7 +3,7 @@ Processing a folder of videos: the slow part of the analysis
 (analysis.process_video) for each video, written to one analysis file per video
 (analysis_file.py).
 
-Used by process_videos.py (e.g. on a cluster: console output only) and by
+Used by process.py (e.g. on a cluster: console output only) and by
 label.py (locally, with progress in the window). Videos that already have a
 usable analysis file made with the same settings are skipped, so an interrupted
 run can simply be started again.
@@ -20,7 +20,8 @@ from tmwt.core import analysis_file
 from tmwt.detection import people
 from tmwt.pose import pose_common
 from tmwt.core.job import STATUS_FAILED, VideoJob
-from tmwt.ui.labeler_ui import DONE, FAILED, WORKING, WindowClosed
+from tmwt.ui.labeler_ui import WindowClosed
+from tmwt.ui.sidebar import DONE, FAILED, WORKING
 
 # Video file extensions to look for.
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v"}
