@@ -10,7 +10,9 @@ fall back to the start-line / finish-line crossings of t_along.
 It uses the labeler's window: every recording is listed in the sidebar
 (coloured by its saved result, with its walk time) and can be clicked to play
 it, with previous-recording, frame-back, play / pause, frame-forward and
-next-recording buttons below the picture. At the end of a recording the next one plays; after the last, playback
+next-recording buttons below the picture, and a seek bar above them: drag it (or click on it) to scrub through
+the recording; the walk's start and end are marked on it in green and red. At
+the end of a recording the next one plays; after the last, playback
 pauses on its final frame. Close the window (or press Esc) to quit.
 
 Usage:
@@ -34,7 +36,8 @@ import timing
 import video_io
 from job import COURSE_M
 from labeler_ui import (DONE, FAILED, GREEN, GREY, KEY_ESC, KEY_SPACE, RED, UNREVIEWED,
-                        WAITING, WHITE, JumpTo, LabelerUI, WindowClosed)
+                        WAITING, WHITE, JumpTo, LabelerUI, WindowClosed, seek_index,
+                        seek_state)
 from window import KEY_LEFT, KEY_RIGHT
 
 # Sidebar legend for the viewer.
@@ -129,6 +132,7 @@ class Recording:
         self.frame_w = int(first.get("frame_w") or DEFAULT_FRAME_W)
         self.frame_h = int(first.get("frame_h") or DEFAULT_FRAME_H)
         self.walk_start, self.walk_end, self.source = walk_timing(csv_path, self.rows)
+        self.times = [row.get("time_s") or 0.0 for row in self.rows]
         self.crop = (0, 0, self.frame_w, self.frame_h)
         if crop_to_content and self.rows:
             self.crop = content_bounds(self.rows, self.frame_w, self.frame_h)
@@ -140,6 +144,10 @@ class Recording:
 
     def time_at(self, k):
         return self.rows[k].get("time_s") or 0.0
+
+    def seek_bar(self, k):
+        """The seek bar at frame k, with the walk's start (green) and end (red) marked."""
+        return seek_state(self.times, k, [(self.walk_start, GREEN), (self.walk_end, RED)])
 
     def describe(self):
         """Console summary of the recording."""
@@ -182,6 +190,7 @@ def play(ui, recording, index, count):
     ui.start_playback()
     clock = video_io.PlaybackClock()
     paused = False
+    was_playing = None     # while the seek bar is dragged: whether to resume after
     k = 0
     while True:
         specs = [("Previous recording", "previous", (ord("p"), ord("P")), "prev_video"),
@@ -189,9 +198,23 @@ def play(ui, recording, index, count):
                  ("Play" if paused else "Pause", "toggle", (KEY_SPACE,), "play" if paused else "pause"),
                  ("Forward one frame", "forward", (), "next_frame"),
                  ("Next recording", "next", (ord("n"), ord("N")), "next_video")]
-        wait = 50 if paused else clock.ms_until(recording.time_at(k))
-        value, _ = ui.show_frame(recording.render(k), wait, specs, hotkeys=hotkeys)
+        if was_playing is not None:
+            wait = 20        # dragging: keep up with the mouse
+        else:
+            wait = 50 if paused else clock.ms_until(recording.time_at(k))
+        value, _ = ui.show_frame(recording.render(k), wait, specs, hotkeys=hotkeys,
+                                 seek=recording.seek_bar(k))
 
+        if isinstance(value, tuple):          # the seek bar: ("seek" | "seek_end", fraction)
+            kind, fraction = value
+            k = seek_index(recording.times, fraction)
+            if was_playing is None:
+                was_playing = not paused
+            paused = True                     # hold still while dragging
+            if kind == "seek_end":
+                paused, was_playing = not was_playing, None
+                clock.restart()
+            continue
         if value == "quit":
             return None
         if value == "previous":

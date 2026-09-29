@@ -192,7 +192,9 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
    screen summarises what was found, with **Start review** and **Save all
    without reviewing**; clicking a video in the sidebar starts the review there.
 2. **Review.** Each video is played back in real time with its detection
-   overlaid, with **Pause / Resume** and **Skip to review** buttons below it.
+   overlaid. Below it: a seek bar (drag or click to scrub; the walk's start and
+   end are marked in green and red), frame-back / play-pause / frame-forward
+   buttons (←, Space, →), and **Skip to review**.
    Once a video has been reviewed, the sidebar splits into **Unreviewed** and
    **Reviewed** sections; reviewed videos move down, dimmed, with a green check
    (approved) or a red cross (skipped).
@@ -354,6 +356,10 @@ its walk time. Click a recording to play it. The buttons below the picture:
 | `▶` / `‖` | Space | Play / pause |
 | `▶|`   | →     | Step forward one frame (pauses) |
 | `▶▶|`  | N     | Next recording |
+
+Above the buttons, a seek bar: drag it (or click on it) to scrub through the
+recording. The walk's start and end are marked on it in green and red, and the
+time is shown as elapsed / total.
 
 At the end of a recording the next one plays; after the last, playback pauses on
 its final frame. Close the window (or press Esc) to quit.

@@ -107,3 +107,37 @@ class PlaybackClock:
     def restart(self):
         """Re-anchor after a pause, so the next frame plays immediately."""
         self._video_t0 = None
+
+
+class FrameSource:
+    """
+    Random access to a job's video frames for playback, with frame k always the
+    same frame the analysis saw as frame k.
+
+    Seeking inside a compressed video can land on the wrong frame for some
+    formats, so frames are only ever decoded in order, from the start, and kept
+    (JPEG-compressed, at full resolution) as they are read. Going back is served
+    from memory; going forward decodes on to the frame asked for.
+    """
+
+    def __init__(self, job, quality=90):
+        self._cap = job.open_capture()
+        self._jpeg = []          # compressed frames read so far, in order
+        self._quality = quality
+        self._last = None        # (index, image) of the latest frame read, to skip a decode
+
+    def get(self, k):
+        """Frame k (a BGR image), or None if the video ends before it."""
+        while len(self._jpeg) <= k:
+            ok, frame = self._cap.read()
+            if not ok:
+                return None
+            self._jpeg.append(cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self._quality])[1])
+            self._last = (len(self._jpeg) - 1, frame)
+        if self._last is not None and self._last[0] == k:
+            return self._last[1].copy()
+        return cv2.imdecode(self._jpeg[k], cv2.IMREAD_COLOR)
+
+    def close(self):
+        self._cap.release()
+        self._jpeg = []

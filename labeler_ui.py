@@ -181,16 +181,67 @@ def _dimmed(img, brightness):
     return (_fit(img, MAIN_W, MAIN_H)[0] * brightness).astype(np.uint8)
 
 
-def _frame_screen(img, top=0):
+def _frame_screen(img, top=0, bottom=BAR_H):
     """
-    Main-area canvas with `img` fitted between a `top` strip and the bottom
-    button bar. Returns (canvas, scale, x0, y0) like _fit, in canvas pixels.
+    Main-area canvas with `img` fitted between a `top` strip and a `bottom`
+    strip (the button bar, plus the seek bar if there is one). Returns
+    (canvas, scale, x0, y0) like _fit, in canvas pixels.
     """
     main = np.zeros((MAIN_H, MAIN_W, 3), dtype=np.uint8)
-    fitted, s, x0, y0 = _fit(img, MAIN_W, MAIN_H - top - BAR_H)
-    main[top:MAIN_H - BAR_H] = fitted
-    cv2.rectangle(main, (0, MAIN_H - BAR_H), (MAIN_W, MAIN_H), (20, 20, 20), -1)
+    fitted, s, x0, y0 = _fit(img, MAIN_W, MAIN_H - top - bottom)
+    main[top:MAIN_H - bottom] = fitted
+    cv2.rectangle(main, (0, MAIN_H - bottom), (MAIN_W, MAIN_H), (20, 20, 20), -1)
     return main, s, x0, y0 + top
+
+
+# Seek bar (show_frame's `seek`): its strip height, track ends and hit margin.
+SEEK_H = 34
+_SEEK_X0, _SEEK_X1 = 24, MAIN_W - 150
+_SEEK_Y = MAIN_H - BAR_H - SEEK_H // 2
+_SEEK_GRAB = 12     # how far above / below the track a press still grabs it
+
+
+def seek_state(times, k, marks=()):
+    """
+    show_frame's `seek` for frame k of a clip whose frames are at `times`
+    (seconds): its position, [(time, colour)] `marks` as markers, and the time
+    as elapsed / total.
+    """
+    t0, span = times[0], max(times[-1] - times[0], 1e-6)
+    markers = [((t - t0) / span, color) for t, color in marks if t is not None and t0 <= t <= times[-1]]
+    return (times[k] - t0) / span, markers, f"{times[k] - t0:5.2f} / {span:5.2f} s"
+
+
+def seek_index(times, fraction):
+    """The frame at `fraction` (0-1) of the way through a clip, by time."""
+    target = times[0] + fraction * (times[-1] - times[0])
+    return int(np.argmin(np.abs(np.asarray(times) - target)))
+
+
+def _seek_fraction(x):
+    """Position along the seek bar (0-1) for canvas x."""
+    return min(1.0, max(0.0, (x - _SEEK_X0) / (_SEEK_X1 - _SEEK_X0)))
+
+
+def _on_seek_bar(pt):
+    return (pt is not None and _SEEK_X0 - _SEEK_GRAB <= pt[0] <= _SEEK_X1 + _SEEK_GRAB
+            and abs(pt[1] - _SEEK_Y) <= _SEEK_GRAB)
+
+
+def _draw_seek_bar(img, fraction, markers, text, active):
+    """
+    The seek bar: track, played part, markers [(fraction, colour)], a handle at
+    `fraction` (bigger while hovered or dragged) and `text` at its right.
+    """
+    y = _SEEK_Y
+    x = int(_SEEK_X0 + fraction * (_SEEK_X1 - _SEEK_X0))
+    cv2.line(img, (_SEEK_X0, y), (_SEEK_X1, y), (70, 70, 70), 4, cv2.LINE_AA)
+    cv2.line(img, (_SEEK_X0, y), (x, y), (200, 200, 200), 4, cv2.LINE_AA)
+    for f, color in markers:
+        mx = int(_SEEK_X0 + f * (_SEEK_X1 - _SEEK_X0))
+        cv2.line(img, (mx, y - 8), (mx, y + 8), color, 2, cv2.LINE_AA)
+    cv2.circle(img, (x, y), 9 if active else 7, WHITE, -1, cv2.LINE_AA)
+    cv2.putText(img, text, (_SEEK_X1 + 18, y + 5), FONT, 0.5, GREY, 1, cv2.LINE_AA)
 
 
 class Button:
@@ -350,6 +401,7 @@ class LabelerUI:
         self._wheel_accum = 0.0       # sidebar scroll not yet applied (fractional rows)
         self.review_targets = set()   # files that can be clicked in the sidebar (see JumpTo)
         self._armed_row = None        # sidebar row the mouse was pressed on
+        self._seeking = False         # the seek bar is being dragged
         self._window = Window(WINDOW, MAIN_W + SIDEBAR_W, MAIN_H)
 
     # --- Sidebar ---------------------------------------------------------------
@@ -514,6 +566,7 @@ class LabelerUI:
         """Forget clicks and presses left over from the previous screen."""
         self._window.mouse_events.clear()
         self._armed = self._armed_at = self._armed_row = None
+        self._seeking = False
 
     def _draw_buttons(self, img, buttons):
         for b in buttons:
@@ -524,10 +577,11 @@ class LabelerUI:
                 state = "hover" if over and self._armed is None else "normal"
             b.draw(img, state)
 
-    def _handle_input(self, buttons, key, hotkeys=None):
+    def _handle_input(self, buttons, key, hotkeys=None, seek_bar=False):
         """
         Apply a key and the queued mouse events to `buttons`. `hotkeys` maps
-        extra keys (with no button) to values.
+        extra keys (with no button) to values. With `seek_bar`, a press on the
+        seek bar starts a drag (self._seeking) and the release ends it.
 
         Returns:
             (value, pressed_at, other_clicks): the chosen button's value (or
@@ -548,6 +602,11 @@ class LabelerUI:
         events = self._window.mouse_events
         while events:
             kind, pt = events.popleft()
+            if seek_bar and (self._seeking or (kind == "down" and _on_seek_bar(pt))):
+                self._seeking = kind == "down"
+                if kind == "up":
+                    chosen = ("seek_end", _seek_fraction(pt[0]))
+                continue
             row = self._sidebar_row_at(pt)
             if row is not None and row in self.review_targets:
                 # A sidebar file: clicked when released on the row it was pressed on.
@@ -570,11 +629,11 @@ class LabelerUI:
                 self._armed = None
         return chosen, pressed_at, other_clicks
 
-    def _interact(self, main, buttons, wait_ms, hotkeys=None):
+    def _interact(self, main, buttons, wait_ms, hotkeys=None, seek_bar=False):
         """Draw `buttons` over `main`, show it for up to wait_ms, and handle input."""
         img = main.copy()
         self._draw_buttons(img, buttons)
-        return self._handle_input(buttons, self._show(img, wait_ms), hotkeys)
+        return self._handle_input(buttons, self._show(img, wait_ms), hotkeys, seek_bar)
 
     def _wait_for_choice(self, main, buttons):
         """Show `main` with `buttons` until one is chosen; return its value."""
@@ -635,7 +694,7 @@ class LabelerUI:
             _put_centered(main, text, y, 0.55, GREY, 1)
         self._show(main, 1)
 
-    def show_frame(self, img, wait_ms, specs, label=None, hotkeys=None):
+    def show_frame(self, img, wait_ms, specs, label=None, hotkeys=None, seek=None):
         """
         One playback frame above a bar of buttons, shown for up to wait_ms.
 
@@ -643,15 +702,27 @@ class LabelerUI:
             specs: button specs for the bar, (text, value, keys).
             label: optional text at the left of the bar (e.g. the mode).
             hotkeys: optional {key: value} for keys with no button.
+            seek: optional (fraction, markers, text) to show a seek bar above
+                the buttons: the position (0-1), [(fraction, colour)] marks,
+                and text shown at its right (e.g. the time).
 
         Returns:
             (value, pressed_at): the chosen button's value or None, and when it
             was pressed (perf_counter) — use that, not the release, for timing.
+            While the seek bar is dragged, value is ("seek", fraction); when
+            it's released, ("seek_end", fraction).
         """
-        main, _, _, _ = _frame_screen(img)
+        main, _, _, _ = _frame_screen(img, bottom=BAR_H + (SEEK_H if seek else 0))
         if label:
             cv2.putText(main, label, (16, MAIN_H - BAR_H // 2 + 6), FONT, 0.55, YELLOW, 1, cv2.LINE_AA)
-        value, pressed_at, _ = self._interact(main, _bar_buttons(specs), wait_ms, hotkeys)
+        if seek:
+            fraction = _seek_fraction(self._window.mouse_pos[0]) if self._seeking else seek[0]
+            active = self._seeking or _on_seek_bar(self._window.mouse_pos)
+            _draw_seek_bar(main, fraction, seek[1], seek[2], active)
+        value, pressed_at, _ = self._interact(main, _bar_buttons(specs), wait_ms, hotkeys,
+                                              seek_bar=bool(seek))
+        if value is None and self._seeking:
+            value = ("seek", _seek_fraction(self._window.mouse_pos[0]))
         return value, pressed_at
 
     def start_playback(self):
