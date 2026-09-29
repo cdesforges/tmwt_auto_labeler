@@ -49,11 +49,11 @@ _STOP_BEFORE_START = "Stop is before start: mark or drag them again"
 _MARKS = {"start": "mark_start", "stop": "mark_stop"}
 
 
-def review_job(job, ui, i, start_at_menu=False):
+def review_job(job, ui, i):
     """
-    Review one analysed job (index i in the batch) in the window. With
-    start_at_menu (a video already reviewed), open at the options instead of
-    replaying it first.
+    Review one analysed job (index i in the batch) in the window: play it back
+    (with its current timing, so a video reviewed before shows what was
+    decided), then ask about it.
 
     Returns:
         QUIT (finish the review now), or None once this video is decided.
@@ -85,8 +85,6 @@ def review_job(job, ui, i, start_at_menu=False):
 
     several_people = people.people_on_screen(job)[0] is not None
     last_frame = job.info.first_frame
-    if start_at_menu:
-        replay = False
     while True:
         if replay:
             start, end, frame = playback(job, ui)

@@ -280,10 +280,8 @@ def run_review(jobs, ui, first, only_one=False):
         while current is not None:
             job = jobs[current]
             state_before = (ui.states[current], ui.notes[current])
-            # A video already approved or skipped opens at the options, not a replay.
-            at_menu = job.review != REVIEW_UNREVIEWED
             try:
-                result = review.review_job(job, ui, current, start_at_menu=at_menu)
+                result = review.review_job(job, ui, current)
             except JumpTo as jump:
                 ui.set_state(current, *state_before)   # left undecided (or as before)
                 review_progress.save(jobs, current)

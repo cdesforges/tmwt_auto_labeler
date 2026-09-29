@@ -220,7 +220,8 @@ review) a **save** button (floppy disk); the folder's name in the middle
    **Reviewed** sections; reviewed videos move down, dimmed, with a green check
    (approved) or a red cross (skipped).
    You can click any video in the sidebar at any time to review it instead,
-   including one already reviewed (the new review replaces its result). After
+   including one already reviewed: it plays back with the timing you gave it,
+   and the new review replaces its result. After
    each decision the next unreviewed video follows, wrapping round to any you
    skipped; videos already decided are never revisited automatically.
    It then asks whether the detection was successful:
