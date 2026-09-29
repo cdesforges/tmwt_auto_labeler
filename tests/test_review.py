@@ -501,5 +501,58 @@ class RetimeTest(Base):
             update.assert_not_called()
 
 
+class PickSubjectTest(Base):
+    """_pick_subject: choosing the walker among several people."""
+
+    class Cap:
+        def set(self, *a):
+            pass
+
+        def read(self):
+            return True, np.zeros((20, 10, 3), np.uint8)
+
+        def release(self):
+            pass
+
+    def setUp(self):
+        super().setUp()
+        self.job = make_job()
+        self.job.subject = 1
+        self.tracks = [mock.Mock(id=1), mock.Mock(id=2)]
+        self.patch(people, "people_on_screen", return_value=(3, [(t, "pose") for t in self.tracks]))
+        self.patch(self.job.__class__, "open_capture", return_value=self.Cap())
+        self.set_subject = self.patch(people, "set_subject")
+        self.patch(people, "subject_start", return_value=(5, 5))
+        self.update = self.patch(timing, "update_timing")
+
+    def ui(self, choice):
+        ui = mock.Mock()
+        ui.pick_person.return_value = choice
+        return ui
+
+    def test_current_subject_is_chosen_to_begin_with(self):
+        ui = self.ui(None)
+        review._pick_subject(self.job, ui)
+        self.assertEqual(ui.pick_person.call_args.kwargs["selected"], 0)
+
+    def test_same_person_changes_nothing(self):
+        # e.g. confirming the walker already tracked: manual timing must survive
+        self.job.timing_source = "manual"
+        self.assertFalse(review._pick_subject(self.job, self.ui(0)))
+        self.set_subject.assert_not_called()
+        self.update.assert_not_called()
+
+    def test_cancel_changes_nothing(self):
+        self.assertFalse(review._pick_subject(self.job, self.ui(None)))
+        self.update.assert_not_called()
+
+    def test_another_person_becomes_the_subject(self):
+        self.job.pose_confirmed = True
+        self.assertTrue(review._pick_subject(self.job, self.ui(1)))
+        self.set_subject.assert_called_once_with(self.job, self.tracks[1])
+        self.assertFalse(self.job.pose_confirmed)
+        self.update.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

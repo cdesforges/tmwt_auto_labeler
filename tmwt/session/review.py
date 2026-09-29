@@ -294,8 +294,9 @@ def _set_endpoints(job, ui, reason=None):
 
 def _pick_subject(job, ui):
     """
-    Show a frame with the tracked people and let the user click the walker, then
-    recompute the timing for that person. Returns False if nothing changed.
+    Show a frame with the tracked people (the current subject chosen to begin
+    with) and let the user choose the walker, then recompute the timing for
+    that person. Returns False if nothing changed.
     """
     frame_idx, present = people.people_on_screen(job)
     if frame_idx is None:
@@ -306,10 +307,11 @@ def _pick_subject(job, ui):
     cap.release()
     if not ok:
         return False
+    current = next((k for k, (track, _) in enumerate(present) if track.id == job.subject), None)
     k = ui.pick_person(frame, [pose for _, pose in present],
-                       f"{job.name}: {len(present)} people in view")
-    if k is None:
-        return False
+                       f"{job.name}: {len(present)} people in view", selected=current)
+    if k is None or k == current:
+        return False   # cancelled, or the same person: nothing changes (manual timing is kept)
     people.set_subject(job, present[k][0])
     job.pose_confirmed = False   # a different person: their pose hasn't been looked at
     job.subject_start = people.subject_start(job)

@@ -248,6 +248,14 @@ class DetectWalkTimesTest(unittest.TestCase):
         self.assertIsNotNone(job.walk_start)
         self.assertEqual(job.timing_note, timing.NOTE_SHORT_STANDSTILL)
 
+    def test_without_endpoints_the_timing_is_cleared(self):
+        # e.g. choosing another walker before any endpoints were set
+        for far, near in ((None, None), ((10, 10), None), (None, (10, 10))):
+            job = camera_job()
+            job.far_ep, job.near_ep = far, near
+            timing.update_timing(job)
+            self.assertEqual((job.walk_start, job.walk_end, job.timing_source), (None, None, "auto"))
+
     def test_no_standstill_means_no_start(self):
         job = camera_job(still_s=0.0)
         quiet(timing.update_timing, job)

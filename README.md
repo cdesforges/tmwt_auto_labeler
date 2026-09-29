@@ -239,7 +239,7 @@ review) a **save** button (floppy disk); the folder's name in the middle
    | Change rope endpoints (`1`) | Re-place the endpoints on the first frame (see [Endpoint detection](#endpoint-detection)). Timing is recomputed from the cached analysis and the video replays. |
    | Mark this file to be skipped (`2`) | No outputs are written, and it's reported as rejected. |
    | Review flagged points (`3`) | Only for videos with flagged pose points: back to flagged-points mode (see [Pose check](#pose-check)). |
-   | Wrong person tracked (`4`) | Only when several people were tracked. Click the person doing the walk test on a frame showing everyone; timing is recomputed for them and the video replays. |
+   | Wrong person tracked (`4`) | Only when several people were tracked. On a frame showing everyone, people are drawn in blue (brighter under the pointer) and the person currently tracked in green; click the person doing the walk test (they turn green), then **Confirm**. Timing is recomputed for them and the video replays; confirming the person already tracked changes nothing. |
    | Back to review (Esc) | Back to the playback, where you were. |
    | Finish all (save all results) (`F`) | Go to the **Review complete** screen now; videos not reviewed yet keep their automatic results, marked unreviewed. |
 

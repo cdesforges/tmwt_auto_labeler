@@ -11,7 +11,7 @@ import numpy as np
 
 from tests.test_base_window import FakeWindow, ScriptExhausted, click
 from tmwt.pose import pose_common as pc
-from tmwt.ui import base_window
+from tmwt.ui import base_window, pickers
 from tmwt.ui.labeler_ui import LabelerUI
 from tmwt.ui.pickers import EndpointPicking
 from tmwt.ui.top_bar import TOPBAR_H
@@ -198,15 +198,88 @@ class PickPersonScreenTest(unittest.TestCase):
             pose[idx] = pc.Landmark(x / w, (400 + dy) / h)
         return pose
 
-    def test_click_on_a_person_picks_them(self):
+    def hip_colour(self, x):
+        """Colour drawn at the hip of the person standing at frame x, in the last canvas shown."""
+        cx, cy = canvas((x, 300))
+        return tuple(int(v) for v in self.win.shown[-1][cy, cx])
+
+    def test_click_selects_then_confirm_returns_them(self):
         poses = [self.person(200), self.person(600)]
-        self.win.script.extend([{}, {"events": click(canvas((600, 300)))}])
+        self.win.script.extend([{}, {"events": click(canvas((600, 300)))}, {"key": KEY_ENTER[0]}])
         self.assertEqual(self.ui.pick_person(FRAME, poses, "two people"), 1)
 
-    def test_click_on_nobody_does_nothing_then_cancel(self):
+    def test_a_click_alone_does_not_finish(self):
+        poses = [self.person(200), self.person(600)]
+        self.win.script.extend([{}, {"events": click(canvas((600, 300)))}])
+        with self.assertRaises(ScriptExhausted):              # still waiting for Confirm
+            self.ui.pick_person(FRAME, poses, "two people")
+
+    def test_no_confirm_before_anyone_is_chosen(self):
         poses = [self.person(200)]
-        self.win.script.extend([{}, {"events": click(canvas((800, 50)))}, {"key": KEY_ESC}])
+        self.win.script.extend([{}, {"key": KEY_ENTER[0]}, {"key": KEY_ESC}])
         self.assertIsNone(self.ui.pick_person(FRAME, poses, "one person"))
+
+    def test_clicking_someone_else_changes_the_choice(self):
+        poses = [self.person(200), self.person(600)]
+        self.win.script.extend([{}, {"events": click(canvas((600, 300)))},
+                                {"events": click(canvas((200, 300)))}, {"key": KEY_ENTER[0]}])
+        self.assertEqual(self.ui.pick_person(FRAME, poses, "two people"), 0)
+
+    def test_current_subject_starts_chosen(self):
+        poses = [self.person(200), self.person(600)]
+        self.win.script.extend([{}, {"key": KEY_ENTER[0]}])
+        self.assertEqual(self.ui.pick_person(FRAME, poses, "two people", selected=1), 1)
+
+    def test_click_on_nobody_keeps_the_choice(self):
+        poses = [self.person(200)]
+        self.win.script.extend([{}, {"events": click(canvas((800, 50)))}, {"key": KEY_ENTER[0]}])
+        self.assertEqual(self.ui.pick_person(FRAME, poses, "one person", selected=0), 0)
+
+    def test_colours_idle_hover_chosen(self):
+        poses = [self.person(200), self.person(600)]
+        self.win.script.extend([
+            {"pos": canvas((850, 50))},                          # pointer on nobody
+            {"pos": canvas((600, 300))},                         # over person 2
+            {"events": click(canvas((600, 300)))},               # choose person 2
+            {"pos": canvas((850, 50))},                          # pointer away again
+            {"key": KEY_ESC}])
+        seen = []
+        orig_show = self.win.show
+
+        def show(canvas_img):
+            orig_show(canvas_img)
+            seen.append((self.hip_colour(200), self.hip_colour(600)))
+        self.win.show = show
+        self.ui.pick_person(FRAME, poses, "two people")
+        self.assertEqual(seen[1], (pickers.PERSON_IDLE, pickers.PERSON_IDLE))
+        self.assertEqual(seen[2], (pickers.PERSON_IDLE, pickers.PERSON_HOVER))
+        self.assertEqual(seen[-1], (pickers.PERSON_IDLE, pickers.PERSON_CHOSEN))
+
+    def test_no_red_for_people(self):
+        # Red is kept for errors.
+        for colour in (pickers.PERSON_IDLE, pickers.PERSON_HOVER):
+            b, g, r = colour
+            self.assertGreater(b, r)
+
+
+class PersonHitTest(unittest.TestCase):
+    def test_boxes_are_padded_bounds(self):
+        pose = [None] * pc.NUM_LANDMARKS
+        pose[0], pose[27] = pc.Landmark(0.5, 0.25), pc.Landmark(0.5, 0.75)
+        (box,) = pickers.person_boxes([pose], (400, 200))       # 200 px tall -> pad 0.15 * 200 + 10 = 40 px
+        self.assertEqual(box, (60.0, 60.0, 140.0, 340.0))
+
+    def test_person_at(self):
+        boxes = [(0, 0, 100, 100), (200, 0, 300, 100)]
+        self.assertEqual(pickers.person_at(boxes, (50, 50)), 0)
+        self.assertEqual(pickers.person_at(boxes, (250, 50)), 1)
+        self.assertIsNone(pickers.person_at(boxes, (150, 50)))
+        self.assertIsNone(pickers.person_at([], (0, 0)))
+
+    def test_overlapping_boxes_pick_the_nearest_centre(self):
+        boxes = [(0, 0, 100, 100), (60, 0, 200, 100)]           # centres 50 and 130
+        self.assertEqual(pickers.person_at(boxes, (70, 50)), 0)
+        self.assertEqual(pickers.person_at(boxes, (95, 50)), 1)
 
 
 if __name__ == "__main__":

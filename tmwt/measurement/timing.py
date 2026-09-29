@@ -100,7 +100,15 @@ def no_start_reason(note):
 
 
 def update_timing(job):
-    """Recompute the automatic walk timing from the job's current endpoints."""
+    """
+    Recompute the automatic walk timing from the job's current endpoints.
+    Without both endpoints there's nothing to time against: the timing is
+    cleared.
+    """
+    if job.far_ep is None or job.near_ep is None:
+        job.walk_start = job.walk_end = None
+        job.timing_detail, job.timing_note, job.timing_source = "", "", "auto"
+        return
     apply_endpoints(job)
     job.walk_start, job.walk_end, job.timing_detail, job.timing_note = detect_walk_times(job)
     job.timing_source = "auto"

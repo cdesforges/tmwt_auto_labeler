@@ -1,6 +1,7 @@
 """
 Picking screens (a family of LabelerUI's screens): the rope endpoints on the
-first frame, and the walking subject among several people. Built on
+first frame, and the walking subject among several people (person_boxes /
+person_at do its hit-testing). Built on
 BaseWindow's _interact / _new_screen, so they get the top bar, sidebar and
 button handling like every other screen.
 """
@@ -12,8 +13,11 @@ from tmwt.ui.base_window import HANDLE_RADIUS
 from tmwt.ui.widgets import (BLUE, CONFIRM, FONT, HEADER_H, KEY_ESC, ORANGE, RED,
                              WHITE, YELLOW, bar_buttons, frame_screen)
 
-# Colours for telling people apart on the "pick the walker" screen.
-PERSON_COLORS = [(0, 255, 0), (255, 160, 0), (255, 0, 255), (0, 200, 255), (60, 60, 255)]
+# People on the "pick the walker" screen: everyone blue, the one under the
+# pointer brighter, the chosen one green (BGR). Red is kept for errors.
+PERSON_IDLE = (190, 100, 30)
+PERSON_HOVER = (255, 210, 120)
+PERSON_CHOSEN = (0, 220, 0)
 
 
 class EndpointPicking:
@@ -164,36 +168,77 @@ class PickerScreens:
                 if 0 <= fx < fw and 0 <= fy < fh:
                     state.place((int(round(fx)), int(round(fy))))
 
-    def pick_person(self, frame, poses, reason):
+    def pick_person(self, frame, poses, reason, selected=None):
         """
-        Let the user click the walking subject among `poses` (people in `frame`),
-        each drawn in its own colour with a number. Returns the index of the
-        chosen pose, or None if cancelled.
-        """
-        img = frame.copy()
-        fh, fw = frame.shape[:2]
-        boxes = []
-        for k, pose in enumerate(poses):
-            color = PERSON_COLORS[k % len(PERSON_COLORS)]
-            pose_common.draw_pose(img, pose, color=color, point_radius=5, line_thickness=3)
-            xs = [lm.x * fw for lm in pose if lm is not None]
-            ys = [lm.y * fh for lm in pose if lm is not None]
-            pad = 0.15 * (max(ys) - min(ys)) + 10
-            boxes.append((min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad))
-            cv2.putText(img, str(k + 1), (int(min(xs)), int(min(ys) - pad)), FONT, 1.0, color, 3, cv2.LINE_AA)
+        Let the user choose the walking subject among `poses` (people in
+        `frame`): everyone is drawn in blue, the person under the pointer in
+        brighter blue, and the chosen one in green. Click a person to choose
+        them, then Confirm.
 
-        base, scale, ox, oy = frame_screen(img, top=HEADER_H)
-        cv2.putText(base, reason, (16, 32), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
-        cv2.putText(base, "Click the person doing the walk test", (16, 62), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
-        buttons = bar_buttons([("Cancel", "cancel", (KEY_ESC,))])
+        Args:
+            selected: index of the person chosen to begin with (e.g. the
+                current subject), or None.
+
+        Returns:
+            The index of the chosen pose, or None if cancelled.
+        """
+        boxes = person_boxes(poses, frame.shape)
+        weight = max(2, round(frame.shape[0] / 360))   # line thickness for the frame's size
         self._new_screen()
         while True:
-            value, _, clicks = self._interact(base, buttons, 30)
+            _, scale, ox, oy = frame_screen(frame, top=HEADER_H)
+            mouse = self._mouse(self.main)
+            hovered = (person_at(boxes, ((mouse[0] - ox) / scale, (mouse[1] - oy) / scale))
+                       if mouse is not None else None)
+            img = frame.copy()
+            # Draw the chosen and hovered people last, so they're on top.
+            for k in sorted(range(len(poses)), key=lambda k: (k == hovered, k == selected)):
+                color = (PERSON_CHOSEN if k == selected else
+                         PERSON_HOVER if k == hovered else PERSON_IDLE)
+                bold = k in (hovered, selected)
+                pose_common.draw_pose(img, poses[k], color=color, point_radius=weight * (3 if bold else 2),
+                                      line_thickness=weight + (2 if bold else 0))
+                x0, y0 = int(boxes[k][0]), int(boxes[k][1])
+                cv2.putText(img, str(k + 1), (x0, max(y0, 20)), FONT, 0.5 * weight, color, weight, cv2.LINE_AA)
+            main, scale, ox, oy = frame_screen(img, top=HEADER_H)
+            cv2.putText(main, reason, (16, 32), FONT, 0.55, ORANGE, 1, cv2.LINE_AA)
+            prompt = ("Click the person doing the walk test" if selected is None
+                      else f"Person {selected + 1} chosen (green): Confirm, or click someone else")
+            cv2.putText(main, prompt, (16, 62), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
+            specs = ([CONFIRM] if selected is not None else []) + [("Cancel", "cancel", (KEY_ESC,))]
+            value, _, clicks = self._interact(main, bar_buttons(specs), 30)
             if value == "cancel":
                 return None
+            if value == "confirm" and selected is not None:
+                return selected
             for cx, cy in clicks:
-                fx, fy = (cx - ox) / scale, (cy - oy) / scale
-                hits = [k for k, (x0, y0, x1, y1) in enumerate(boxes) if x0 <= fx <= x1 and y0 <= fy <= y1]
-                if hits:
-                    # Overlapping boxes: take the person whose centre is closest.
-                    return min(hits, key=lambda k: abs((boxes[k][0] + boxes[k][2]) / 2 - fx))
+                hit = person_at(boxes, ((cx - ox) / scale, (cy - oy) / scale))
+                if hit is not None:
+                    selected = hit
+
+
+def person_boxes(poses, frame_shape):
+    """
+    Each pose's clickable box (x0, y0, x1, y1) in frame pixels: its landmarks'
+    bounds padded by 15 % of its height plus 10 px.
+    """
+    fh, fw = frame_shape[:2]
+    boxes = []
+    for pose in poses:
+        xs = [lm.x * fw for lm in pose if lm is not None]
+        ys = [lm.y * fh for lm in pose if lm is not None]
+        pad = 0.15 * (max(ys) - min(ys)) + 10
+        boxes.append((min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad))
+    return boxes
+
+
+def person_at(boxes, pt):
+    """
+    Index of the person whose box contains `pt` (frame pixels) — the one whose
+    centre is closest across, where boxes overlap — or None.
+    """
+    fx, fy = pt
+    hits = [k for k, (x0, y0, x1, y1) in enumerate(boxes) if x0 <= fx <= x1 and y0 <= fy <= y1]
+    if not hits:
+        return None
+    return min(hits, key=lambda k: abs((boxes[k][0] + boxes[k][2]) / 2 - fx))
