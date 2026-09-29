@@ -27,8 +27,8 @@ import people
 import timing
 import video_io
 from job import COURSE_M, REVIEW_APPROVED, REVIEW_REJECTED, STATUS_NO_BODY
-from labeler_ui import (DONE, FAILED, GREY, KEY_ENTER, KEY_ESC, KEY_SPACE,
-                        ORANGE, WHITE, WORKING)
+from labeler_ui import (APPROVED_MARK, DONE, FAILED, GREY, KEY_ENTER, KEY_ESC,
+                        KEY_SPACE, ORANGE, REJECTED_MARK, WHITE, WORKING)
 
 QUIT = "quit"
 # Outcomes of setting endpoints (_set_endpoints).
@@ -90,6 +90,7 @@ def review_job(job, ui, i):
                 continue
             job.review = REVIEW_APPROVED
             ui.set_state(i, DONE, f"approved  {job.duration:.2f}s")
+            ui.mark_reviewed(i, APPROVED_MARK)
             return None
         if choice == "endpoints":
             outcome, note = _set_endpoints(job, ui)
@@ -308,4 +309,5 @@ def _pick_subject(job, ui):
 def _reject(job, ui, i, reason):
     job.review, job.review_note = REVIEW_REJECTED, reason
     ui.set_state(i, FAILED, f"rejected: {reason}")
+    ui.mark_reviewed(i, REJECTED_MARK)
     print(f"  Rejected ({reason}); no outputs written.")

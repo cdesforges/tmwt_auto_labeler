@@ -130,6 +130,9 @@ colour-coded: **white** waiting, **yellow** being analysed / reviewed / saved,
    without reviewing**; clicking a video in the sidebar starts the review there.
 2. **Review.** Each video is played back in real time with its detection
    overlaid, with **Pause / Resume** and **Skip to review** buttons below it.
+   Once a video has been reviewed, the sidebar splits into **Unreviewed** and
+   **Reviewed** sections; reviewed videos move down, dimmed, with a green check
+   (approved) or a red cross (skipped).
    You can click any video in the sidebar at any time to review it instead,
    including one already reviewed (the new review replaces its result). After
    each decision the next unreviewed video follows, wrapping round to any you

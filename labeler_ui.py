@@ -96,6 +96,15 @@ HEADER_H = 84         # instruction strip above the frame when picking endpoints
 _BTN_GAP = 16
 _BTN_MIN_W = 150
 
+# Review outcomes shown in the sidebar (LabelerUI.mark_reviewed).
+APPROVED_MARK = "approved"
+REJECTED_MARK = "rejected"
+# Width kept free at the right of a reviewed row for its mark.
+_MARK_W = 26
+_SIDEBAR_BG = 25
+# How much reviewed rows are faded toward the background (0 = not at all).
+_REVIEWED_FADE = 0.55
+
 # Sidebar layout, and how many rows one scroll-wheel notch moves.
 _SIDEBAR_TOP = 62
 _SIDEBAR_ROW_H = 42
@@ -145,6 +154,22 @@ def _fit(img, w, h):
     x0, y0 = (w - nw) // 2, (h - nh) // 2
     canvas[y0:y0 + nh, x0:x0 + nw] = cv2.resize(img, (nw, nh), interpolation=interp)
     return canvas, s, x0, y0
+
+
+def _dim(color):
+    """A colour faded toward the sidebar background, for reviewed rows."""
+    return tuple(int(c + (_SIDEBAR_BG - c) * _REVIEWED_FADE) for c in color)
+
+
+def _draw_mark(img, outcome, center):
+    """A green check (approved) or a red cross (rejected) centred at `center`."""
+    x, y = center
+    if outcome == APPROVED_MARK:
+        cv2.polylines(img, [np.array([(x - 7, y), (x - 2, y + 5), (x + 8, y - 6)], np.int32)],
+                      False, GREEN, 2, cv2.LINE_AA)
+    else:
+        cv2.line(img, (x - 6, y - 6), (x + 6, y + 6), RED, 2, cv2.LINE_AA)
+        cv2.line(img, (x - 6, y + 6), (x + 6, y - 6), RED, 2, cv2.LINE_AA)
 
 
 def _dimmed(img, brightness):
@@ -247,6 +272,7 @@ class LabelerUI:
         self.names = list(names)
         self.states = [WAITING] * len(self.names)
         self.notes = [""] * len(self.names)
+        self.reviewed = [None] * len(self.names)   # APPROVED_MARK / REJECTED_MARK once reviewed
         self._active = None           # index of the highlighted file, or None
         self._scroll_first = None     # first sidebar row shown; None = follow the active file
         self._last_progress_draw = 0.0
@@ -276,8 +302,26 @@ class LabelerUI:
         self.states[i] = state
         self.notes[i] = note
 
+    def mark_reviewed(self, i, outcome):
+        """Record file i's review outcome (APPROVED_MARK / REJECTED_MARK); it moves to "Reviewed"."""
+        self.reviewed[i] = outcome
+
+    def _display_rows(self):
+        """
+        The sidebar's rows, top to bottom: ("file", index) or ("header", text).
+        Once any file has been reviewed, the list splits into an "Unreviewed"
+        section and a "Reviewed" section below it; until then it's one list.
+        """
+        files = range(len(self.names))
+        if not any(self.reviewed):
+            return [("file", i) for i in files]
+        todo = [i for i in files if not self.reviewed[i]]
+        done = [i for i in files if self.reviewed[i]]
+        return ([("header", f"Unreviewed ({len(todo)})")] + [("file", i) for i in todo]
+                + [("header", f"Reviewed ({len(done)})")] + [("file", i) for i in done])
+
     def _sidebar(self):
-        panel = np.full((MAIN_H, SIDEBAR_W, 3), 25, dtype=np.uint8)
+        panel = np.full((MAIN_H, SIDEBAR_W, 3), _SIDEBAR_BG, dtype=np.uint8)
         x0 = 15
         cv2.putText(panel, f"Videos ({len(self.names)})", (x0, 35), FONT, 0.65, WHITE, 2, cv2.LINE_AA)
         if self.review_targets:
@@ -287,33 +331,27 @@ class LabelerUI:
         cv2.line(panel, (x0, 48), (SIDEBAR_W - x0, 48), DIM, 1)
         hovered = self._sidebar_row_at(self._window.mouse_pos)
 
-        top, legend_h = _SIDEBAR_TOP, _SIDEBAR_LEGEND_H
+        rows = self._display_rows()
+        top, row_h = _SIDEBAR_TOP, _SIDEBAR_ROW_H
         visible = self._sidebar_rows()
         first = self._sidebar_first()
-        row_h = _SIDEBAR_ROW_H
+        for n, (kind, value) in enumerate(rows[first:first + visible]):
+            y = top + n * row_h
+            if kind == "header":
+                cv2.putText(panel, value.upper(), (x0, y + 22), FONT, 0.42, GREY, 1, cv2.LINE_AA)
+                cv2.line(panel, (x0, y + 30), (SIDEBAR_W - x0, y + 30), (60, 60, 60), 1)
+                continue
+            self._draw_file_row(panel, value, y, hovered)
 
-        for row, i in enumerate(range(first, min(len(self.names), first + visible))):
-            y = top + row * row_h
-            if i == self.active:
-                cv2.rectangle(panel, (5, y - 4), (SIDEBAR_W - 5, y + row_h - 8), (55, 55, 55), -1)
-            elif i == hovered and i in self.review_targets:
-                shade = (40, 40, 40) if self._armed_row == i else (45, 45, 45)
-                cv2.rectangle(panel, (5, y - 4), (SIDEBAR_W - 5, y + row_h - 8), shade, -1)
-                cv2.rectangle(panel, (5, y - 4), (SIDEBAR_W - 5, y + row_h - 8), DIM, 1)
-            name = _truncate(f"{i + 1}. {self.names[i]}", SIDEBAR_W - 2 * x0, 0.5)
-            cv2.putText(panel, name, (x0, y + 14), FONT, 0.5, STATE_COLORS[self.states[i]], 1, cv2.LINE_AA)
-            if self.notes[i]:
-                note = _truncate(self.notes[i], SIDEBAR_W - 2 * x0 - 12, 0.4)
-                cv2.putText(panel, note, (x0 + 12, y + 31), FONT, 0.4, GREY, 1, cv2.LINE_AA)
-        if len(self.names) > visible:
+        if len(rows) > visible:
             # Scrollbar: the thumb's size and position show which part of the list is in view.
             track_top, track_h = top - 4, visible * row_h
-            thumb_h = max(20, track_h * visible // len(self.names))
-            thumb_y = track_top + (track_h - thumb_h) * first // (len(self.names) - visible)
+            thumb_h = max(20, track_h * visible // len(rows))
+            thumb_y = track_top + (track_h - thumb_h) * first // (len(rows) - visible)
             cv2.rectangle(panel, (SIDEBAR_W - 6, track_top), (SIDEBAR_W - 3, track_top + track_h), (45, 45, 45), -1)
             cv2.rectangle(panel, (SIDEBAR_W - 6, thumb_y), (SIDEBAR_W - 3, thumb_y + thumb_h), DIM, -1)
 
-        y = MAIN_H - legend_h + 20
+        y = MAIN_H - _SIDEBAR_LEGEND_H + 20
         cv2.line(panel, (x0, y - 15), (SIDEBAR_W - x0, y - 15), DIM, 1)
         x = x0
         for label, color in _LEGEND:
@@ -326,29 +364,55 @@ class LabelerUI:
             x += tw + 26
         return panel
 
+    def _draw_file_row(self, panel, i, y, hovered):
+        """One file's row: highlight, name (in its state colour) and note; reviewed rows dimmed with a mark."""
+        x0, row_h = 15, _SIDEBAR_ROW_H
+        box = ((5, y - 4), (SIDEBAR_W - 5, y + row_h - 8))
+        if i == self.active:
+            cv2.rectangle(panel, *box, (55, 55, 55), -1)
+        elif i == hovered and i in self.review_targets:
+            cv2.rectangle(panel, *box, (40, 40, 40) if self._armed_row == i else (45, 45, 45), -1)
+            cv2.rectangle(panel, *box, DIM, 1)
+
+        outcome = self.reviewed[i]
+        name_color, note_color = STATE_COLORS[self.states[i]], GREY
+        if outcome and i != self.active:
+            name_color, note_color = _dim(name_color), _dim(note_color)
+        text_w = SIDEBAR_W - 2 * x0 - (_MARK_W if outcome else 0)
+        cv2.putText(panel, _truncate(f"{i + 1}. {self.names[i]}", text_w, 0.5),
+                    (x0, y + 14), FONT, 0.5, name_color, 1, cv2.LINE_AA)
+        if self.notes[i]:
+            cv2.putText(panel, _truncate(self.notes[i], text_w - 12, 0.4),
+                        (x0 + 12, y + 31), FONT, 0.4, note_color, 1, cv2.LINE_AA)
+        if outcome:
+            _draw_mark(panel, outcome, (SIDEBAR_W - x0 - 10, y + 12))
+
     def _sidebar_rows(self):
-        """How many file rows fit in the sidebar."""
+        """How many rows fit in the sidebar."""
         return max(1, (MAIN_H - _SIDEBAR_TOP - _SIDEBAR_LEGEND_H) // _SIDEBAR_ROW_H)
 
     def _sidebar_first(self):
-        """Index of the first file row shown: the user's scroll position, or centred on the active file."""
+        """Index of the first row shown: the user's scroll position, or centred on the active file."""
+        rows = self._display_rows()
         visible = self._sidebar_rows()
-        last_start = max(0, len(self.names) - visible)
+        last_start = max(0, len(rows) - visible)
         if self._scroll_first is not None:
             return min(max(0, self._scroll_first), last_start)
         if self._active is None:
             return 0
-        return min(max(0, self._active - visible // 2), last_start)
+        pos = rows.index(("file", self._active))
+        return min(max(0, pos - visible // 2), last_start)
 
     def _sidebar_row_at(self, pt):
-        """Index of the file whose sidebar row is at canvas point `pt`, or None."""
+        """Index of the file whose sidebar row is at canvas point `pt`, or None (headers too)."""
         if pt is None or pt[0] < MAIN_W:
             return None
         row = (pt[1] - (_SIDEBAR_TOP - 4)) // _SIDEBAR_ROW_H
         if not 0 <= row < self._sidebar_rows():
             return None
-        i = self._sidebar_first() + row
-        return i if i < len(self.names) else None
+        rows = self._display_rows()
+        n = self._sidebar_first() + row
+        return rows[n][1] if n < len(rows) and rows[n][0] == "file" else None
 
     def _apply_scrolling(self):
         """Scroll the sidebar by any wheel / trackpad movement made over it."""
