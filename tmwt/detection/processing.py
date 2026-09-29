@@ -41,9 +41,10 @@ class Cancelled(Exception):
 
 
 def find_videos(input_dir):
-    """Sorted paths of the video files directly inside `input_dir`."""
+    """Sorted paths of the video files directly inside `input_dir` (not in subfolders)."""
     return sorted(os.path.join(input_dir, f) for f in os.listdir(input_dir)
-                  if os.path.splitext(f)[1].lower() in VIDEO_EXTENSIONS)
+                  if os.path.splitext(f)[1].lower() in VIDEO_EXTENSIONS
+                  and os.path.isfile(os.path.join(input_dir, f)))
 
 
 def settings(backend_name, model_path, matte_crop):
@@ -171,7 +172,7 @@ def _check_pose(job, backend, backend_name, model_path, matte_crop, ui, i, subti
     """
     if job.status == STATUS_FAILED:
         return job, {}
-    flags = _subject_flags(job)
+    flags = _subject_flags(job) or []
     runs = [dict(model_strength=model_strength(model_path), **pose_check.summary(flags))]
     used = model_path
     if not flags:
@@ -190,11 +191,16 @@ def _check_pose(job, backend, backend_name, model_path, matte_crop, ui, i, subti
             analysis.process_video(retry, heavier, backend, matte_crop,
                                    _progress_callback(ui, i, f"Re-analysing {job.name} (heavier model)",
                                                       subtitle))
+            retry_flags = _subject_flags(retry) if retry.status != STATUS_FAILED else None
             if retry.status == STATUS_FAILED:
                 result = f"anomalies remain (heavier model failed: {retry.error})"
                 print(f"  Heavier model failed ({retry.error}); keeping the first result.")
+            elif retry_flags is None:
+                # Finding nobody isn't a fix: keep the first result, which did.
+                result = "anomalies remain (heavier model found nobody)"
+                print("  Heavier model found nobody; keeping the first result.")
             else:
-                flags = _subject_flags(retry)
+                flags = retry_flags
                 runs.append(dict(model_strength=model_strength(heavier), **pose_check.summary(flags)))
                 job, used = retry, heavier
                 result = "anomalies remain" if flags else "fixed by heavier model"
@@ -204,8 +210,8 @@ def _check_pose(job, backend, backend_name, model_path, matte_crop, ui, i, subti
 
 
 def _subject_flags(job):
-    """The walking subject's implausible pose points (none if nobody was seen)."""
-    return job.pose_flags if analysis.choose_subject(job) is not None else []
+    """The walking subject's implausible pose points, or None if nobody was seen."""
+    return job.pose_flags if analysis.choose_subject(job) is not None else None
 
 
 def _examples(run, n=3):

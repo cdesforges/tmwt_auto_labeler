@@ -46,6 +46,10 @@ CANVAS_W, CANVAS_H = MAIN_W + SIDEBAR_W, TOPBAR_H + MAIN_H
 
 # Brightness of a background frame behind a message.
 DIM_MESSAGE = 0.25
+# Drag kind for a screen's draggable points (see _handle_input's `handles`),
+# and how close (main-area pixels) a press must be to grab one.
+POINT = "point"
+HANDLE_RADIUS = 14
 
 
 class BaseWindow:
@@ -177,14 +181,16 @@ class BaseWindow:
         main_pt = self.main.local_if_inside(pt)
         return next((b for b in buttons if b.contains(main_pt)), None)
 
-    def _handle_input(self, buttons, key, hotkeys=None, seek_markers=None):
+    def _handle_input(self, buttons, key, hotkeys=None, seek_markers=None, handles=None):
         """
         Apply a key and the queued mouse events to `buttons` (main-area
         pixels), the top bar and the sidebar. `hotkeys` maps extra keys (with no
-        button) to values. With `seek_markers` (the seek bar's [Marker]; None if
-        there's no seek bar), a press on the seek bar starts a drag (self._drag)
-        — scrubbing, or moving a mark by its tab — and the release ends it with
-        a value from _drag_value.
+        button) to values. A press can start a drag (self._drag), which the
+        release ends with a value from _drag_value:
+          - with `seek_markers` (the seek bar's [Marker]; None if there's no
+            seek bar): scrubbing, or moving a mark by its tab;
+          - with `handles` ({id: (x, y)} in main-area pixels): moving the
+            point within HANDLE_RADIUS of the press (the nearest).
 
         Returns:
             (value, pressed_at, other_clicks): the chosen button's value (or
@@ -207,24 +213,25 @@ class BaseWindow:
         while events:
             kind, pt = events.popleft()
             main_pt = self.main.to_local(pt)
-            if seek_markers is not None:
-                if self._drag is None and kind == "down":
-                    self._drag = self.seek_bar.grab(main_pt, seek_markers)
-                    if self._drag is not None:
-                        continue
-                elif self._drag is not None:
-                    if kind == "up":
-                        chosen = self._drag_value(main_pt[0], done=True)
-                        self._drag = None
+            if self._drag is not None:
+                if kind == "up":        # the release ends the drag, wherever it is
+                    chosen = self._drag_value(main_pt, done=True)
+                    self._drag = None
+                continue
+            if kind == "down":
+                self._drag = self._grab(main_pt, seek_markers, handles)
+                if self._drag is not None:
+                    self._armed = self._armed_row = None
                     continue
             row = self.sidebar.row_at(self.sidebar.local_if_inside(pt))
             if row is not None and row in self.review_targets:
                 # A sidebar file: clicked when released on the row it was pressed on.
                 if kind == "down":
                     self._armed_row, self._armed = row, None
-                elif self._armed_row == row:
-                    self._armed_row = None
-                    raise JumpTo(row)
+                else:
+                    pressed, self._armed_row, self._armed = self._armed_row, None, None
+                    if pressed == row:
+                        raise JumpTo(row)
                 continue
             self._armed_row = None if kind == "up" else self._armed_row
             hit = self._button_at(buttons, pt)
@@ -292,18 +299,41 @@ class BaseWindow:
         if choice == "discard":
             raise QuitWithoutSaving()
 
-    def _drag_value(self, x, done):
+    def _grab(self, pt, seek_markers, handles):
+        """What a press at main-area `pt` starts dragging (see _handle_input), or None."""
+        if seek_markers is not None:
+            grab = self.seek_bar.grab(pt, seek_markers)
+            if grab is not None:
+                return grab
+        if handles and pt is not None:
+            near = [(float(np.hypot(pt[0] - x, pt[1] - y)), hid) for hid, (x, y) in handles.items()]
+            dist, hid = min(near)
+            if dist <= HANDLE_RADIUS:
+                return (POINT, hid)
+        return None
+
+    def _drag_value(self, pt, done):
         """
-        The value for the seek bar drag in progress, with the pointer at main-area
-        x: ("seek", fraction) while scrubbing, ("seek_end", fraction) on release;
-        ("mark_drag", id, fraction) / ("mark_drop", id, fraction) for a mark.
+        The value for the drag in progress, with the pointer at main-area `pt`:
+        ("seek", fraction) while scrubbing and ("seek_end", fraction) on
+        release; ("mark_drag" / "mark_drop", id, fraction) for a seek-bar mark;
+        ("point_drag" / "point_drop", id, (x, y)) for a handle.
         """
-        fraction = self.seek_bar.fraction_at(x)
-        if self._drag[0] == MARK:
-            return ("mark_drop" if done else "mark_drag", self._drag[1], fraction)
+        kind, drag_id = self._drag
+        if kind == POINT:
+            return ("point_drop" if done else "point_drag", drag_id, tuple(pt))
+        fraction = self.seek_bar.fraction_at(pt[0])
+        if kind == MARK:
+            return ("mark_drop" if done else "mark_drag", drag_id, fraction)
         return ("seek_end" if done else "seek", fraction)
 
-    def _interact(self, main, buttons, wait_ms, hotkeys=None, seek_markers=None):
+    def _live_drag_value(self):
+        """The value for the drag in progress at the pointer now (None if not dragging)."""
+        if self._drag is None or self._window.mouse_pos is None:
+            return None
+        return self._drag_value(self._mouse(self.main), done=False)
+
+    def _interact(self, main, buttons, wait_ms, hotkeys=None, seek_markers=None, handles=None):
         """Draw `buttons` over `main`, show it for up to wait_ms, and handle input."""
         img = main.copy()
         mouse = self._mouse(self.main)
@@ -311,7 +341,7 @@ class BaseWindow:
         hovered = next((b for b in buttons if isinstance(b, IconButton) and b.contains(mouse)), None)
         if hovered is not None and self._armed is None and self._drag is None:
             draw_tooltip(img, hovered.text, (hovered.x, hovered.y), above=True)
-        return self._handle_input(buttons, self._show(img, wait_ms), hotkeys, seek_markers)
+        return self._handle_input(buttons, self._show(img, wait_ms), hotkeys, seek_markers, handles)
 
     def _wait_for_choice(self, main, buttons):
         """Show `main` with `buttons` until one is chosen; return its value."""

@@ -30,6 +30,8 @@ COLUMNS = [
     "file", "result", "reason", "endpoints", "timing", "start_method", "endpoint_behavior",
     "start_s", "end_s", "duration_s", "speed_mps", "model_strength", "pose_check", "outputs_saved",
 ]
+# Processing report status of a video with no (usable) analysis file.
+NOT_PROCESSED = "not processed"
 PROCESSING_COLUMNS = ["file", "status", "error", "model_requested", "model_strength",
                       "pose_check", "flagged_frames_first", "flagged_frames_final", "examples"]
 
@@ -157,12 +159,14 @@ def write_processing_report(videos):
 
     remain = [r for r in rows if r["pose_check"].startswith("anomalies remain")]
     fixed = [r for r in rows if r["pose_check"] == "fixed by heavier model"]
-    failed = [r for r in rows if r["status"] != "processed"]
+    failed = [r for r in rows if r["status"] == STATUS_FAILED]
+    unprocessed = [r for r in rows if r["status"] == NOT_PROCESSED]
     lines = [
         "# TMWT processing report", "",
         f"- Written: {datetime.now():%Y-%m-%d %H:%M}",
         f"- Videos: {len(rows)}",
         f"  - failed: {len(failed)}",
+        f"  - not processed yet: {len(unprocessed)}",
         f"  - pose anomalies fixed by re-running with the heavier model: {len(fixed)}",
         f"  - pose anomalies remaining (the reviewer is asked to confirm or remove): {len(remain)}",
         "",
@@ -186,7 +190,7 @@ def _processing_row(video):
     final = runs[-1] if runs else {}
     return {
         "file": os.path.basename(video),
-        "status": meta.get("status", "not processed"),
+        "status": meta.get("status", NOT_PROCESSED),
         "error": meta.get("error") or "",
         "model_requested": meta.get("model", ""),
         "model_strength": meta.get("model_strength", meta.get("model", "")),

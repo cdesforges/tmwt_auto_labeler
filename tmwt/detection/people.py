@@ -90,11 +90,20 @@ def _box(pose, frame_shape):
 
 
 def _overlap(a, b):
-    """Intersection of two boxes as a fraction of the smaller one's area."""
+    """
+    Intersection of two boxes as a fraction of the smaller one's area. A box
+    with no area (a pose with one landmark, or all in a line) counts as fully
+    overlapping only if it lies inside the other box.
+    """
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    if min(area_a, area_b) <= 0:
+        small, big = (a, b) if area_a <= area_b else (b, a)
+        inside = big[0] <= small[0] and small[2] <= big[2] and big[1] <= small[1] and small[3] <= big[3]
+        return 1.0 if inside else 0.0
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
-    smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
-    return ix * iy / smaller if smaller > 0 else 1.0
+    return ix * iy / min(area_a, area_b)
 
 
 def distinct_people(poses, frame_shape):

@@ -104,7 +104,8 @@ def draw_info_panel(height, time_s, frame_idx, t_along, walk_start, walk_end,
         y += 35
         text(f"{duration:.3f}s", y, 1.2, _BRIGHT_GREEN, 2)
         y += 30
-        text(f"{COURSE_M / duration:.2f} m/s", y, 0.7, _GREEN, 2)
+        if duration > 0:
+            text(f"{COURSE_M / duration:.2f} m/s", y, 0.7, _GREEN, 2)
     elif started:
         text("Elapsed", y, 0.5, _LABEL)
         y += 35

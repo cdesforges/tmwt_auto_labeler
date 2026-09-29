@@ -88,7 +88,13 @@ def run(jobs, ui, output_dir, review_first=True):
                   "no outputs were written.")
             return False
         except WindowClosed:
-            review_progress.save(jobs, ui.active)
+            if ui.in_review:
+                review_progress.save(jobs, ui.active)
+            else:
+                # Closed before the review began (e.g. at "Continue your
+                # previous review?"): the jobs don't hold the saved decisions
+                # yet, so leave the file as it was.
+                review_progress.put_back(jobs, before)
             print("\nWindow closed. Your review progress is kept: run the review "
                   "again to continue where you left off, or start over.")
             raise
@@ -308,16 +314,18 @@ def run_review(jobs, ui, first, only_one=False):
 
 def save_outputs(jobs, ui):
     """
-    Phase 3: write the outputs of every job that has endpoints and wasn't
-    rejected — approved ones and, if review was skipped or stopped early, the
-    automatic results of the rest (marked unreviewed).
+    Phase 3: write the outputs of every approved job and, if review was
+    skipped or stopped early, the automatic results of the rest (marked
+    unreviewed) that have endpoints and complete timing. Rejected jobs get no outputs (and
+    lose any from an earlier save).
     """
     for job in jobs:
         if job.review == REVIEW_REJECTED:
             data_export.remove_outputs(job)   # e.g. saved before, rejected since
     to_save = [(i, job) for i, job in enumerate(jobs)
-               if job.frames and job.review != REVIEW_REJECTED
-               and (job.far_ep is not None or job.review == REVIEW_APPROVED)]
+               if job.frames and (job.review == REVIEW_APPROVED
+                                  or (job.review != REVIEW_REJECTED and job.far_ep is not None
+                                      and job.duration is not None))]
     for k, (i, job) in enumerate(to_save):
         approved = job.review == REVIEW_APPROVED
         print(f"\n  Saving ({k + 1}/{len(to_save)}): {job.name}"

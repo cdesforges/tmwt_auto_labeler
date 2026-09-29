@@ -120,8 +120,8 @@ class LabelerUI(PickerScreens, BaseWindow):
                                drag=self._drag, drag_fraction=drag_fraction)
         value, pressed_at, _ = self._interact(main, bar_buttons(specs), wait_ms, hotkeys,
                                               seek_markers=seek.markers if seek else None)
-        if value is None and self._drag is not None and self._window.mouse_pos is not None:
-            value = self._drag_value(self._mouse(self.main)[0], done=False)
+        if value is None:
+            value = self._live_drag_value()
         return value, pressed_at
 
     def start_playback(self):

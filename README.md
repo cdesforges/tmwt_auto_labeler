@@ -284,19 +284,29 @@ For each video, the labeler establishes two rope endpoints:
 
 Without a single ArUco marker, the video is marked orange during analysis. When
 its review comes up, the start point is already placed where the subject was
-standing and you click only the **finish** point, then **Confirm**. If the
-start is wrong, **Move start point** lets you click it; a start you place is
-treated as a start line (timing starts when the subject crosses it, or at their
-first movement if they're already on or past it).
+standing and you click only the **finish** point, then **Confirm (Enter)**.
+
+On the endpoint screen (also **☰ > Change rope endpoints**):
+- **Drag** the START or FINISH point to move it (it's ringed when the pointer
+  is on it); the line follows as you drag.
+- **Move start point** / **Move endpoint**: the next click places that point
+  (**Keep start point** / **Keep endpoint** leaves it where it was).
+- **Auto start point** (shown once the start has been moved): puts the start
+  back where the subject was detected standing.
+- A start at the detected standing spot is timed from the subject's first
+  foot movement; a start you place anywhere else is treated as a start line
+  (timing starts when the subject crosses it, or at their first movement if
+  they're already on or past it).
 
 If the endpoints don't give both a start and an end time, you're asked straight
-away to **Redo endpoints**, **Time manually** or **Skip this file**. A common
-cause: the subject is already walking when the video begins, so there's no
-standing start. Use **Move start point** and click the start line.
+away to **Move start point**, **Move endpoint**, **Mark it in the playback**
+(mark the start and stop with the green and red dots) or **Skip this file**. A
+common cause: the subject is already walking when the video begins, so there's
+no standing start. Use **Move start point** and click the start line.
 
-If you cancel endpoint picking, you're taken back to the review options, where
-you can try again, time the video manually, or skip it. A video in which nobody
-was detected at all only offers **Skip this file**.
+If you cancel endpoint picking, the video still plays, with a note: set them
+from the menu (**☰ > Change rope endpoints**) or skip the video there. A video
+in which nobody was detected at all only offers **Skip this file**.
 
 ## Foot points
 
@@ -492,6 +502,25 @@ its final frame. Close the window (or press Esc) to quit.
 
 ---
 
+## Testing
+
+```bash
+.venv/bin/python -m unittest discover tests
+```
+
+About 600 unit tests (standard-library `unittest`, no extra packages) cover
+every module that doesn't need a real window, a video device or a pose model:
+geometry and timing, pose check and smoothing, people tracking, the ArUco
+finish, processing (with a stand-in pose backend, including the heavier-model
+retry), analysis files and outputs, review progress and the review flows (with
+a stand-in window), and the window's widgets, panels, seek bar, player and
+input handling (clicks, drags, keys, sidebar and top bar). They run in a couple
+of seconds. The key-repeat tests run in a separate process, because pygame and
+OpenCV bundle clashing copies of SDL2 on macOS.
+
+Not unit-tested: the pygame window process itself and pose inference (they
+need a display and the models); those are checked by running the labeler.
+
 ## Repository layout
 
 The four scripts you run are at the top level; everything else is in the
@@ -506,7 +535,7 @@ view.py                   # Skeleton-only playback of saved CSVs
 media/                    # Input videos (not tracked by git)
 models/                   # MediaPipe model file (the default --model path)
 assets/                   # ArUco marker specification; RNA Institute logo for the top bar
-tests/                    # Unit tests: python -m unittest discover tests
+tests/                    # Unit tests (see Testing below)
 runs/                     # Output folders from earlier runs (data, not code)
 
 tmwt/

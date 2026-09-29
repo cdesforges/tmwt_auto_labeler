@@ -28,6 +28,8 @@ the same results as one straight after processing.
 import hashlib
 import json
 import os
+import zipfile
+import zlib
 from datetime import datetime
 
 import numpy as np
@@ -123,15 +125,45 @@ def save(job, provenance):
 
 # --- Loading -------------------------------------------------------------------
 
+# What reading a damaged, truncated or foreign file can raise (e.g. a copy from
+# the cluster that was interrupted).
+_UNREADABLE = (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile, zlib.error)
+
+
+def _open(path):
+    """
+    The analysis file at `path`, opened (use it in a `with` block).
+
+    Raises:
+        AnalysisFileError: it can't be read as an analysis file.
+    """
+    try:
+        data = np.load(path)
+    except _UNREADABLE as e:
+        raise AnalysisFileError(f"analysis file unreadable ({type(e).__name__}); re-process") from e
+    if not hasattr(data, "files"):   # a plain .npy array, not an .npz archive
+        raise AnalysisFileError("not an analysis file; re-process")
+    return data
+
+
+def _read(data, name):
+    """One entry of an open analysis file (the meta decoded from JSON)."""
+    try:
+        value = data[name]
+        return json.loads(str(value)) if name == "meta" else value
+    except _UNREADABLE as e:
+        raise AnalysisFileError(f"analysis file damaged ({name}: {type(e).__name__}); re-process") from e
+
+
 def read_meta(video_path):
     """The meta dict of a video's analysis file, or None if there isn't a usable one."""
     path = analysis_path(video_path)
     if not os.path.exists(path):
         return None
     try:
-        with np.load(path) as data:
-            return json.loads(str(data["meta"]))
-    except (OSError, ValueError, KeyError):
+        with _open(path) as data:
+            return _read(data, "meta")
+    except AnalysisFileError:
         return None
 
 
@@ -143,14 +175,14 @@ def load(job):
     job.status = STATUS_FAILED with its error.
 
     Raises:
-        AnalysisFileError: no file, an unknown format, or the local video isn't
-            the one that was analysed.
+        AnalysisFileError: no file, an unreadable or damaged one, an unknown
+            format, or the local video isn't the one that was analysed.
     """
     path = analysis_path(job.path)
     if not os.path.exists(path):
         raise AnalysisFileError("not processed yet (run process.py)")
-    with np.load(path) as data:
-        meta = json.loads(str(data["meta"]))
+    with _open(path) as data:
+        meta = _read(data, "meta")
         if meta.get("format_version") != FORMAT_VERSION:
             raise AnalysisFileError(f"analysis file format {meta.get('format_version')} "
                                     f"not supported (expected {FORMAT_VERSION}); re-process")
@@ -161,7 +193,7 @@ def load(job):
         if meta["status"] == STATUS_FAILED:
             job.status, job.error = STATUS_FAILED, meta["error"]
             return
-        times, H, counts, poses = data["times"], data["H"], data["people"], data["poses"]
+        times, H, counts, poses = (_read(data, name) for name in ("times", "H", "people", "poses"))
 
     crop = tuple(meta["crop"]) if meta["crop"] else None
     cap = video_io.open_video(job.path, crop, meta["first_frame_idx"])

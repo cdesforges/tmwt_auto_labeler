@@ -99,7 +99,9 @@ class _KeyRepeat:
         for key, when in self._next.items():
             if now >= when:
                 messages.append({"key": _SPECIAL_KEYS[key], "repeat": time.time()})
-                self._next[key] = max(when + self.INTERVAL_S, now)
+                # One interval from now even if this repeat was late (a stalled
+                # loop mustn't send the next one straight after).
+                self._next[key] = max(when, now) + self.INTERVAL_S
         return messages
 
 

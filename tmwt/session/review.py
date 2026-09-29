@@ -24,7 +24,7 @@ manual). The video doesn't end the playback: it pauses on the last frame.
 A video in which nobody was detected at all only offers "Skip this file".
 Videos whose endpoints couldn't be found automatically ask for clicks first,
 with the start point pre-placed where the subject was detected standing. If new
-endpoints don't give a complete timing, the user is asked straight away to redo
+endpoints don't give a complete timing, the user is asked straight away to move
 them, mark the timing in the playback, or skip the video.
 
 If the pose check (pose_check.py) flagged points the heavier model couldn't
@@ -212,8 +212,8 @@ def _set_endpoints(job, ui, reason=None):
     """
     Let the user (re)place the endpoints, with the start point pre-placed at the
     current start (or where the subject was detected standing), then recompute
-    the timing. If that timing is incomplete, ask straight away whether to redo
-    the endpoints, mark the timing in the playback, or skip the video.
+    the timing. If that timing is incomplete, ask straight away whether to move
+    the start point or endpoint again, mark the timing in the playback, or skip the video.
 
     Returns:
         (outcome, note): outcome is _REPLAY, _CANCELLED or _SKIP; note is a
@@ -221,8 +221,10 @@ def _set_endpoints(job, ui, reason=None):
     """
     start = job.far_ep or job.subject_start
     finish = job.near_ep
+    move = None        # which point the picker starts by moving (after a failed attempt)
     while True:
-        picked = ui.pick_endpoints(job.info.first_frame, reason, start, finish)
+        picked = ui.pick_endpoints(job.info.first_frame, reason, start, finish, move=move,
+                                   auto_start=job.subject_start)
         if picked is None:
             return _CANCELLED, None
         start, finish, moved = picked
@@ -237,19 +239,20 @@ def _set_endpoints(job, ui, reason=None):
             return _REPLAY, None
 
         hint = ([("If the subject was already walking when the video starts, use", GREY),
-                 ("Redo endpoints > Move start point and click the start line.", GREY)]
+                 ("Move start point and click the start line.", GREY)]
                 if job.far_ep_is_standing_spot else [])
         choice = ui.show_message([
             ("No walk start / end found", ORANGE),
             (summary_lines(job)[1], GREY),
-            ("Redo the endpoints, or mark the start and stop yourself in the playback.", GREY),
-        ] + hint, [("Redo endpoints", "redo", ()), ("Mark it in the playback", "mark", KEY_ENTER),
+            ("Move the start point or endpoint, or mark the start and stop yourself in the playback.", GREY),
+        ] + hint, [("Move start point", "start", ()), ("Move endpoint", "finish", ()),
+            ("Mark it in the playback", "mark", KEY_ENTER),
             ("Skip this file", "skip", (KEY_ESC,))], background=job.info.first_frame)
         if choice == "skip":
             return _SKIP, None
         if choice == "mark":
             return _REPLAY, "Mark the walk start and stop with the green and red dots"
-        reason = None
+        reason, move = None, choice   # "start" / "finish": move that point
 
 
 def _pick_subject(job, ui):

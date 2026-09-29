@@ -45,7 +45,9 @@ BTN_H = 44
 BAR_H = 64            # bottom button bar on image screens
 HEADER_H = 84         # instruction strip above the frame when picking endpoints
 _BTN_GAP = 16
+_BTN_GAP_TIGHT = 8       # between buttons in a row that had to be tightened
 _BTN_MIN_W = 150
+_ROW_MARGIN = 8          # least space between a button row and the main area's edges
 
 
 # --- Text and image helpers ----------------------------------------------------
@@ -58,9 +60,14 @@ def put_centered(img, text, y, scale, color, thickness=1):
 
 
 def truncate(text, max_w, scale, thickness=1):
-    """Shorten `text` with a trailing '...' until it fits in max_w pixels."""
+    """
+    Shorten `text` with a trailing '...' until it fits in max_w pixels.
+    Returns "" if not even '...' fits.
+    """
     if cv2.getTextSize(text, FONT, scale, thickness)[0][0] <= max_w:
         return text
+    if cv2.getTextSize("...", FONT, scale, thickness)[0][0] > max_w:
+        return ""
     while text and cv2.getTextSize(text + "...", FONT, scale, thickness)[0][0] > max_w:
         text = text[:-1]
     return text + "..."
@@ -285,7 +292,10 @@ def button_row(specs, y):
     """
     Buttons for `specs`, side by side and centred at height y. A spec is
     (text, value, keys), or (text, value, keys, icon) for an icon button (see
-    ICONS), which is drawn as that icon at a fixed width.
+    ICONS), which is drawn as that icon at a fixed width. A row too wide for
+    the main area is tightened (narrower gaps, text buttons down to their
+    text plus a small margin) to fit, and if that isn't enough the text
+    buttons share the space equally with shortened labels.
     """
     buttons = []
     for spec in specs:
@@ -294,13 +304,35 @@ def button_row(specs, y):
         if icon:
             buttons.append(IconButton((0, y, _ICON_BTN_W, BTN_H), text, value, keys, icon=icon))
         else:
-            w = max(_BTN_MIN_W, cv2.getTextSize(text, FONT, 0.6, 1)[0][0] + 48)
+            w = max(_BTN_MIN_W, _text_w(text) + 48)
             buttons.append(TextButton((0, y, w, BTN_H), text, value, keys))
-    x = (MAIN_W - sum(b.w for b in buttons) - _BTN_GAP * (len(buttons) - 1)) // 2
+    gap = _BTN_GAP
+    room = MAIN_W - 2 * _ROW_MARGIN
+    text_buttons = [b for b in buttons if isinstance(b, TextButton)]
+    if _row_width(buttons, gap) > room:
+        gap = _BTN_GAP_TIGHT
+        for b in text_buttons:
+            b.w = _text_w(b.text) + 24
+    if _row_width(buttons, gap) > room and text_buttons:
+        # Still too wide: share the space left equally, shortening labels.
+        share = (room - _row_width(buttons, gap) + sum(b.w for b in text_buttons)) // len(text_buttons)
+        for b in text_buttons:
+            b.w = max(share, 40)
+            b.text = truncate(b.text, b.w - 16, 0.6)
+    x = (MAIN_W - _row_width(buttons, gap)) // 2
     for b in buttons:
         b.x = x
-        x += b.w + _BTN_GAP
+        x += b.w + gap
     return buttons
+
+
+def _text_w(text):
+    """Width of a button label in pixels."""
+    return cv2.getTextSize(text, FONT, 0.6, 1)[0][0]
+
+
+def _row_width(buttons, gap):
+    return sum(b.w for b in buttons) + gap * (len(buttons) - 1)
 
 
 # Icons, drawn with shapes (the font has no symbols): media-player controls,
